@@ -76,6 +76,9 @@ class DayTable:
     # (or Yom Kippur). Early Shabbos never applies to Yom Tov, so the early
     # Shabbos rules are skipped on such a Friday.
     friday_before_yom_tov: frozenset[str] = frozenset()
+    # Occasions that are themselves Yom Tov (or Yom Kippur). There is no early
+    # Shabbos on a Friday that is Yom Tov, not even by the one-week switch.
+    yom_tov: frozenset[str] = frozenset()
 
 
 def _on(month: str, *days: int, weekdays: tuple[int, ...] = ANY_WEEKDAY) -> DateRule:
@@ -243,6 +246,18 @@ _ERUVEI_YOM_TOV = frozenset(
 # With two days of Yom Tov, so are these: the next day is the second day.
 _TWO_DAY_FIRST_DAYS = frozenset({"shvii_pesach", "shavuos_1"})
 
+# The occasions that are themselves Yom Tov, or Yom Kippur.
+_COMMON_YOM_TOV = frozenset({"rosh_hashana_1", "rosh_hashana_2", "yom_kippur"})
+_TWO_DAY_YOM_TOV = frozenset(
+    {
+        "succos_1", "succos_2", "shmini_atzeres", "simchas_torah", "pesach_1",
+        "pesach_2", "shvii_pesach", "acharon_pesach", "shavuos_1", "shavuos_2",
+    }
+)
+_ONE_DAY_YOM_TOV = frozenset(
+    {"succos", "simchas_torah", "pesach", "shvii_pesach", "shavuos"}
+)
+
 # Yom Kippur on Shabbos has no combination. That date runs the Yom Kippur day.
 _UNCOMBINED = frozenset({("yom_kippur", SHABBOS)})
 
@@ -256,10 +271,12 @@ def table_for(yom_tov_days: int, purim: str) -> DayTable:
         occasions = _COMMON_OCCASIONS + _TWO_DAY_OCCASIONS
         combinations = _COMMON_COMBINATIONS + _TWO_DAY_COMBINATIONS
         before_yom_tov = _ERUVEI_YOM_TOV | _TWO_DAY_FIRST_DAYS
+        yom_tov = _COMMON_YOM_TOV | _TWO_DAY_YOM_TOV
     elif yom_tov_days == 1:
         occasions = _COMMON_OCCASIONS + _ONE_DAY_OCCASIONS
         combinations = _COMMON_COMBINATIONS + _ONE_DAY_COMBINATIONS
         before_yom_tov = _ERUVEI_YOM_TOV
+        yom_tov = _COMMON_YOM_TOV | _ONE_DAY_YOM_TOV
     else:
         raise ValueError(f"yom_tov_days must be 1 or 2, not {yom_tov_days!r}")
 
@@ -273,5 +290,5 @@ def table_for(yom_tov_days: int, purim: str) -> DayTable:
         raise ValueError(f"purim must be 'regular' or 'shushan', not {purim!r}")
 
     return DayTable(
-        occasions, SHABBOS_VARIANTS, combinations, _UNCOMBINED, before_yom_tov
+        occasions, SHABBOS_VARIANTS, combinations, _UNCOMBINED, before_yom_tov, yom_tov
     )

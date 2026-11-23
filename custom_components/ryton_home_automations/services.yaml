@@ -17,3 +17,10 @@ preview:
     output_file:
       selector:
         text:
+
+reload_schedule:
+  fields:
+    schedule_file:
+      default: ryton_schedule.json
+      selector:
+        text:

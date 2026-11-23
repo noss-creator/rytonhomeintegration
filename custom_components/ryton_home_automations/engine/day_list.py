@@ -94,10 +94,15 @@ def build_day_list(
     )
     entry = _day_entry(schedule, resolved.day_id)
 
-    # Where the early Shabbos rules are skipped, the client's one-week early
-    # switch still applies.
     rules = settings.get("early_shabbos_rules", ())
-    if resolved.occasion in table.friday_before_yom_tov:
+    if resolved.occasion in table.yom_tov:
+        # There is no early Shabbos on a Friday that is itself Yom Tov:
+        # neither the rules nor the client's one-week switch apply.
+        rules = ()
+        one_week = None
+    # Below, the rules are skipped but the client's one-week early switch
+    # still applies.
+    elif resolved.occasion in table.friday_before_yom_tov:
         # The Shabbos that follows is Yom Tov, and early Shabbos never
         # applies to Yom Tov.
         rules = ()

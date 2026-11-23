@@ -22,6 +22,15 @@
       {"start": "2027-02-08T15:35:12+00:00", "end": "2027-02-08T15:35:12+00:00", "summary": "Tset Hakochavim (18 minutes)", "description": "Nightfall, 18 minutes: 17:35"}
     ]
   },
+  "sof_zman_2026_11_27": {
+    "_note": "The four sof zman events of Friday 27 November 2026, as calendar.get_events returned them after the integration switched them on. Times are in UTC.",
+    "events": [
+      {"start": "2026-11-27T06:13:30+00:00", "summary": "Sof Zman Shema (Mg\"A)", "description": "Latest time for Shema: 08:13"},
+      {"start": "2026-11-27T06:51:00+00:00", "summary": "Sof Zman Shema (Gr\"A)", "description": "Latest time for Shema: 08:51"},
+      {"start": "2026-11-27T07:17:40+00:00", "summary": "Sof Zman Tefilla (Mg\"A)", "description": "Latest time for Tefilla: 09:17"},
+      {"start": "2026-11-27T07:42:00+00:00", "summary": "Sof Zman Tefilla (Gr\"A)", "description": "Latest time for Tefilla: 09:42"}
+    ]
+  },
   "hebrew_dates": {
     "_note": "The all-day Hebrew date event of one date in each month, read with calendar.get_events from the daily events calendar. Together with Kislev and Sh'vat elsewhere in this file, this covers all fourteen month names the integration uses.",
     "events": [

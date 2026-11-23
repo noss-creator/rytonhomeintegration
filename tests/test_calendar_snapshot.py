@@ -135,6 +135,20 @@ def test_a_time_with_no_timezone_is_refused():
         parse_events(events, [], TZ, FEB_7, FEB_7)
 
 
+# --- the four sof zman events, as Home Assistant really writes them ---------
+
+
+def test_real_sof_zman_events_are_read():
+    friday = date(2026, 11, 27)
+    events = [{"start": "2026-11-27", "summary": "17 Kislev 5787"}]
+    events += RECORDED["sof_zman_2026_11_27"]["events"]
+    snapshot = parse_events(events, [], TZ, friday, friday)
+    assert snapshot.zman(friday, "sof_zman_shema_mga") == local(friday, "08:13:30")
+    assert snapshot.zman(friday, "sof_zman_shema_gra") == local(friday, "08:51:00")
+    assert snapshot.zman(friday, "sof_zman_tefilla_mga") == local(friday, "09:17:40")
+    assert snapshot.zman(friday, "sof_zman_tefilla_gra") == local(friday, "09:42:00")
+
+
 # --- every month name, as Home Assistant really writes it -------------------
 
 _REAL_DATES = (

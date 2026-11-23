@@ -10,7 +10,7 @@ Nothing here talks to Home Assistant. It only decides what to ask for.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -139,6 +139,43 @@ def _entity_call(
     raise ScheduleError(f"{entity_id}: the action is not understood")
 
 
+def latest_state(missed: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Combine automations that were missed into the state the house should be in now.
+
+    ``missed`` holds the ``rooms`` of each missed automation, in time order.
+    Nothing in between is replayed: each room is brought straight to where
+    it should be.
+
+    A scene is a snapshot of its whole room. So for each room the result is
+    the latest scene that was set there, if any, followed by the entities
+    set after that scene, each in the last state asked for. Entities set
+    before the scene are dropped, since the scene replaced them.
+
+    The result has the shape of an automation's ``rooms``, except that a
+    room may hold both a scene and entities. Pass it to ``plan_steps`` with
+    ``merged=True``.
+    """
+    combined: dict[str, dict[str, Any]] = {}
+    for rooms in missed:
+        for room, body in rooms.items():
+            if not isinstance(body, Mapping):
+                raise ScheduleError(f"{room}: the room is not understood")
+            if "scene" in body:
+                combined[room] = {"scene": body["scene"], "entities": {}}
+            else:
+                now = combined.setdefault(room, {"entities": {}})
+                for entity_id, action in body.get("entities", {}).items():
+                    # Moved to the end, so entities run in the order they
+                    # were last set.
+                    now["entities"].pop(entity_id, None)
+                    now["entities"][entity_id] = action
+    return {
+        room: {key: value for key, value in body.items() if value}
+        for room, body in combined.items()
+        if body.get("scene") or body["entities"]
+    }
+
+
 def plan_steps(
     rooms: Mapping[str, Any],
     *,
@@ -146,11 +183,15 @@ def plan_steps(
     group_size: int = 5,
     pause_seconds: float = 1,
     rooms_off: Collection[str] = (),
+    merged: bool = False,
 ) -> list[Step]:
     """Return the steps that carry out one automation.
 
     ``rooms`` is the automation's ``rooms`` from the schedule. ``rooms_off``
     holds the rooms whose scheduling is switched off; they are skipped.
+
+    ``merged`` is for the result of ``latest_state``, where a room may hold
+    a scene and entities together. The scene runs first, then the entities.
     """
     if isinstance(group_size, bool) or not isinstance(group_size, int) or group_size < 1:
         raise ScheduleError(f"The group size must be 1 or more, not {group_size!r}")
@@ -163,14 +204,14 @@ def plan_steps(
         if not isinstance(body, Mapping):
             raise ScheduleError(f"{room}: the room is not understood")
         has_scene, has_entities = "scene" in body, "entities" in body
-        if has_scene == has_entities:
+        if not (has_scene or has_entities) or (has_scene and has_entities and not merged):
             raise ScheduleError(f"{room}: a room holds either entities or a scene")
         if has_scene:
             scene = body["scene"]
             if not isinstance(scene, str) or not scene.startswith("scene."):
                 raise ScheduleError(f"{room}: {scene!r} is not a scene")
             scenes.append(Call(room, scene, _SCENE, "turn_on"))
-        else:
+        if has_entities:
             for entity_id, action in body["entities"].items():
                 entities.append(_entity_call(room, entity_id, action, fade_seconds))
 

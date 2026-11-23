@@ -14,6 +14,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
 from .calendar_reader import async_read_calendar
@@ -25,8 +26,11 @@ from .engine.preview import (
     build_preview,
     format_preview,
 )
+from .engine.time_resolver import ScheduleError
+from .scheduler import Scheduler
 
 SERVICE_PREVIEW = "preview"
+SERVICE_RELOAD_SCHEDULE = "reload_schedule"
 
 PREVIEW_SCHEMA = vol.Schema(
     {
@@ -37,6 +41,10 @@ PREVIEW_SCHEMA = vol.Schema(
         vol.Optional("schedule_file", default=DEFAULT_SCHEDULE_FILE): cv.string,
         vol.Optional("output_file"): cv.string,
     }
+)
+
+RELOAD_SCHEMA = vol.Schema(
+    {vol.Optional("schedule_file", default=DEFAULT_SCHEDULE_FILE): cv.string}
 )
 
 
@@ -57,8 +65,20 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+async def _async_read_schedule_file(hass: HomeAssistant, name: str) -> Any:
+    path = _config_file(hass, name)
+    try:
+        return await hass.async_add_executor_job(_read_json, path)
+    except FileNotFoundError as err:
+        raise HomeAssistantError(f"No schedule file at {path}") from err
+    except ValueError as err:
+        raise HomeAssistantError(f"{path} is not valid JSON: {err}") from err
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Ryton Home Automations."""
+    scheduler = Scheduler(hass)
+    await scheduler.async_load()
 
     async def handle_preview(call: ServiceCall) -> ServiceResponse:
         """Work out the day and the times of a span of dates. Switches nothing."""
@@ -66,13 +86,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         days = call.data["days"]
         last = first + timedelta(days=days - 1)
 
-        schedule_path = _config_file(hass, call.data["schedule_file"])
-        try:
-            schedule = await hass.async_add_executor_job(_read_json, schedule_path)
-        except FileNotFoundError as err:
-            raise HomeAssistantError(f"No schedule file at {schedule_path}") from err
-        except ValueError as err:
-            raise HomeAssistantError(f"{schedule_path} is not valid JSON: {err}") from err
+        schedule = await _async_read_schedule_file(hass, call.data["schedule_file"])
 
         try:
             calendar = await async_read_calendar(
@@ -105,6 +119,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ],
         }
 
+    async def handle_reload_schedule(call: ServiceCall) -> ServiceResponse:
+        """Take the schedule from its file and run the house from it."""
+        schedule = await _async_read_schedule_file(hass, call.data["schedule_file"])
+        if not isinstance(schedule, dict):
+            raise HomeAssistantError("The schedule file does not hold a schedule")
+        try:
+            changes = await scheduler.async_set_schedule(schedule)
+        except ScheduleError as err:
+            raise HomeAssistantError(f"The schedule was refused: {err}") from err
+
+        tz = ZoneInfo(hass.config.time_zone)
+        return {
+            "revision": schedule.get("revision"),
+            "jewish_calendar_changes": changes,
+            "days": [
+                {"date": day_list.date.isoformat(), "day": day_list.day.day_id}
+                for day_list in scheduler.day_lists
+            ],
+            "upcoming": [
+                {
+                    "id": automation.id,
+                    "time": automation.time.astimezone(tz).isoformat(timespec="seconds"),
+                    "alongside": automation.alongside,
+                }
+                for automation in scheduler.upcoming
+            ],
+        }
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_PREVIEW,
@@ -112,10 +154,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=PREVIEW_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RELOAD_SCHEDULE,
+        handle_reload_schedule,
+        schema=RELOAD_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def started(hass: HomeAssistant) -> None:
+        """Once Home Assistant is up, fix today's list and catch up on anything missed."""
+        await scheduler.async_rebuild(recover=True)
+
+    entry.async_on_unload(async_at_started(hass, started))
+    entry.async_on_unload(scheduler.async_stop)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload Ryton Home Automations."""
     hass.services.async_remove(DOMAIN, SERVICE_PREVIEW)
+    hass.services.async_remove(DOMAIN, SERVICE_RELOAD_SCHEDULE)
     return True

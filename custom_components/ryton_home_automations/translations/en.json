@@ -29,7 +29,17 @@
         },
         "output_file": {
           "name": "Output file",
-          "description": "If given, the list is also written to this file in the configuration folder."
+          "description": "If given, the list is written to this file in the configuration folder and only a summary is returned."
+        }
+      }
+    },
+    "reload_schedule": {
+      "name": "Reload schedule",
+      "description": "Takes the schedule from its file, sets the Jewish Calendar to match it, and runs the house from it.",
+      "fields": {
+        "schedule_file": {
+          "name": "Schedule file",
+          "description": "The schedule file in the configuration folder."
         }
       }
     }

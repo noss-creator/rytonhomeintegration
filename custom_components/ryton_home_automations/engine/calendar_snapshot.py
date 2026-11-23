@@ -29,11 +29,14 @@ class CalendarDataError(Exception):
 # Event summary -> zman key. A summary is matched by how it starts, since
 # nightfall carries a note, as in "Tset Hakochavim (18 minutes)".
 #
-# The four sof zman events are missing: they were not selected on the
-# installation these names were read from, so their text is not yet known.
+# Every name here has been read from a real installation.
 _ZMAN_SUMMARIES = (
     ("Alot HaShachar", "alos"),
     ("Netz Hachama", "netz"),
+    ('Sof Zman Shema (Gr"A)', "sof_zman_shema_gra"),
+    ('Sof Zman Shema (Mg"A)', "sof_zman_shema_mga"),
+    ('Sof Zman Tefilla (Gr"A)', "sof_zman_tefilla_gra"),
+    ('Sof Zman Tefilla (Mg"A)', "sof_zman_tefilla_mga"),
     ("Chatzot Hayom", "chatzos"),
     ("Mincha Gedola", "mincha_gedola"),
     ("Mincha Ketana", "mincha_ketana"),
