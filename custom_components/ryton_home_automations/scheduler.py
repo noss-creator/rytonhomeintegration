@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -40,7 +41,8 @@ from .engine.day_list import (
 from .engine.day_resolver import UnresolvedDayError
 from .engine.due import split_due
 from .engine.preview import LOOK_AHEAD_DAYS, LOOK_BACK_DAYS
-from .engine.runner import carry_out
+from .engine.run_through import RunThroughItem
+from .engine.runner import CHECK_WAIT_SECONDS, carry_out
 from .engine.time_resolver import (
     PastRolloverError,
     ScheduleError,
@@ -48,6 +50,11 @@ from .engine.time_resolver import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def _sleep(seconds: float) -> None:
+    """Wait. Kept as one function so tests can make the waits instant."""
+    await asyncio.sleep(seconds)
 
 JEWISH_CALENDAR = "jewish_calendar"
 TITLE = "Ryton Home Automations"
@@ -77,6 +84,7 @@ class Scheduler:
         self._timers: list[CALLBACK_TYPE] = []
         self._rollover: CALLBACK_TYPE | None = None
         self._running = asyncio.Lock()
+        self._run_through: asyncio.Task[None] | None = None
 
     # --- storage ----------------------------------------------------------
 
@@ -216,12 +224,15 @@ class Scheduler:
 
     async def _async_carry_out(
         self,
-        rooms: dict[str, Any],
+        rooms: Mapping[str, Any],
         name: str,
         *,
         fade_seconds: float = 0,
         merged: bool = False,
-    ) -> None:
+        check_wait: float = CHECK_WAIT_SECONDS,
+        report: bool = True,
+    ) -> list[str]:
+        """Carry out one automation. Return a line for each entity still failing."""
         pacing = (self.schedule or {}).get("settings", {}).get("pacing", {})
         group_size = pacing.get("group_size", 5)
         pause_seconds = pacing.get("pause_seconds", 1)
@@ -234,8 +245,9 @@ class Scheduler:
                 merged=merged,
             )
         except ScheduleError as err:
-            self._report(f"{name} could not run: {err}")
-            return
+            if report:
+                self._report(f"{name} could not run: {err}")
+            return [f"could not run: {err}"]
 
         async with self._running:
             _LOGGER.info("Running %s", name)
@@ -243,16 +255,78 @@ class Scheduler:
                 steps,
                 self._async_send,
                 self._get_state,
-                asyncio.sleep,
+                _sleep,
                 group_size=group_size,
                 pause_seconds=pause_seconds,
+                check_wait=check_wait,
             )
 
-        if failures:
-            lines = "\n".join(
-                f"- {failure.call.entity_id}: {failure.reason}" for failure in failures
-            )
-            self._report(f"{name}: {len(failures)} still failing after three tries.\n{lines}")
+        lines = [f"{failure.call.entity_id}: {failure.reason}" for failure in failures]
+        if lines and report:
+            listed = "\n".join(f"- {line}" for line in lines)
+            self._report(f"{name}: {len(lines)} still failing after three tries.\n{listed}")
+        return lines
+
+    # --- running through automations back to back ---------------------------
+
+    @property
+    def run_through_running(self) -> bool:
+        return self._run_through is not None and not self._run_through.done()
+
+    @callback
+    def async_start_run_through(
+        self,
+        items: list[RunThroughItem],
+        check_wait: float,
+        write_report: Callable[[str], Awaitable[None]],
+    ) -> None:
+        """Carry out ``items`` one after another in the background."""
+        if self.run_through_running:
+            raise HomeAssistantError("A run-through is already running")
+        self._run_through = self.hass.async_create_background_task(
+            self._async_run_through(items, check_wait, write_report),
+            name=f"{DOMAIN} run-through",
+        )
+
+    @callback
+    def async_stop_run_through(self) -> bool:
+        """Stop a run-through. Return whether one was running."""
+        if not self.run_through_running:
+            return False
+        self._run_through.cancel()
+        return True
+
+    async def _async_run_through(
+        self,
+        items: list[RunThroughItem],
+        check_wait: float,
+        write_report: Callable[[str], Awaitable[None]],
+    ) -> None:
+        lines: list[str] = []
+        failed = done = 0
+        stopped = False
+        try:
+            for item in items:
+                failures = await self._async_carry_out(
+                    item.rooms,
+                    f"{item.label}: {item.name}",
+                    fade_seconds=item.fade_seconds,
+                    check_wait=check_wait,
+                    report=False,
+                )
+                done += 1
+                failed += len(failures)
+                result = "ok" if not failures else f"{len(failures)} FAILED"
+                lines.append(f"{item.label:<40} {item.automation_id:<28} {result}")
+                lines += [f"    {failure}" for failure in failures]
+        except asyncio.CancelledError:
+            stopped = True
+        summary = (
+            f"Run-through {'stopped' if stopped else 'finished'}: {done} of "
+            f"{len(items)} automations run, {failed} entities failed."
+        )
+        await write_report("\n".join([summary, "", *lines]) + "\n")
+        self._report(summary)
 
     async def _async_send(self, call: Call) -> None:
         await self.hass.services.async_call(
@@ -291,3 +365,4 @@ class Scheduler:
     @callback
     def async_stop(self) -> None:
         self._cancel_timers()
+        self.async_stop_run_through()

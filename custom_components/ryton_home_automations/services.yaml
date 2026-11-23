@@ -24,3 +24,33 @@ reload_schedule:
       default: ryton_schedule.json
       selector:
         text:
+
+run_through:
+  fields:
+    start_date:
+      selector:
+        date:
+    days:
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 400
+          mode: box
+    each_day_once:
+      default: true
+      selector:
+        boolean:
+    check_wait_seconds:
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 60
+          mode: box
+    output_file:
+      default: ryton_run_through.txt
+      selector:
+        text:
+
+stop_run_through:

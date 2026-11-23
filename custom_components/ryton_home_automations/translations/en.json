@@ -42,6 +42,36 @@
           "description": "The schedule file in the configuration folder."
         }
       }
+    },
+    "run_through": {
+      "name": "Run through",
+      "description": "Carries out automations one after another without waiting for the clock, to test them. This really switches devices. With no start date it runs every automation of every day in the schedule.",
+      "fields": {
+        "start_date": {
+          "name": "Start date",
+          "description": "Run the automations of dates from this one. Leave empty to run every automation of every day in the schedule."
+        },
+        "days": {
+          "name": "Number of days",
+          "description": "How many dates, when a start date is given."
+        },
+        "each_day_once": {
+          "name": "Each kind of day once",
+          "description": "Skip a date whose kind of day already ran, when a start date is given."
+        },
+        "check_wait_seconds": {
+          "name": "Seconds to wait before checking",
+          "description": "10 in normal running. A smaller number makes the run-through faster."
+        },
+        "output_file": {
+          "name": "Report file",
+          "description": "The report is written to this file in the configuration folder when the run-through ends."
+        }
+      }
+    },
+    "stop_run_through": {
+      "name": "Stop run-through",
+      "description": "Stops a run-through that is in progress."
     }
   }
 }

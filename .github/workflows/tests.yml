@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  engine:
+    name: Engine (no Home Assistant)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install -r requirements-test.txt
+      - run: pytest -q
+
+  home-assistant:
+    name: Inside Home Assistant, with time travel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install -r requirements-test-ha.txt
+      - run: >
+          pytest -q -o asyncio_mode=auto
+          tests/test_in_home_assistant.py tests/test_time_travel.py
