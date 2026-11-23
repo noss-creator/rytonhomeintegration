@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 import hdate
 import pytest
+from hdate.translator import set_language
 
 # Home Assistant's test tools do not run on Windows. Without them these tests
 # are skipped. Install pytest-homeassistant-custom-component on Linux to run them.
@@ -59,6 +60,9 @@ def _utc(day: date, clock: str) -> str:
 
 
 def _stand_in_events(entity_id: str, start: datetime, end: datetime) -> list[dict]:
+    # The hdate library writes in Hebrew unless told otherwise. The real
+    # integration sets the language it was configured with.
+    set_language("en")
     events = []
     day = start.date()
     last = end.date() - timedelta(days=1)
