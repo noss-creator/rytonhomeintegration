@@ -1,0 +1,3 @@
+hdate==1.2.2
+pytest
+tzdata

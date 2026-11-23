@@ -1,0 +1,19 @@
+preview:
+  fields:
+    start_date:
+      selector:
+        date:
+    days:
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 800
+          mode: box
+    schedule_file:
+      default: ryton_schedule.json
+      selector:
+        text:
+    output_file:
+      selector:
+        text:

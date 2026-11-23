@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# The engine is imported on its own, as "engine", so its tests need neither
+# Home Assistant nor the Home Assistant package.
+pythonpath = ["custom_components/ryton_home_automations", "."]
+testpaths = ["tests"]

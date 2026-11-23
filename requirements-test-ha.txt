@@ -1,0 +1,5 @@
+# For tests/test_in_home_assistant.py. Linux only: Home Assistant's test tools
+# do not load on Windows. Add "asyncio_mode = auto" to the pytest options when
+# running them.
+-r requirements-test.txt
+pytest-homeassistant-custom-component

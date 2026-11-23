@@ -1,0 +1,37 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Ryton Home Automations",
+        "description": "Add Ryton Home Automations to this house?"
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Ryton Home Automations is already added."
+    }
+  },
+  "services": {
+    "preview": {
+      "name": "Preview schedule",
+      "description": "Works out which day each date is and the time of every automation, without switching anything.",
+      "fields": {
+        "start_date": {
+          "name": "Start date",
+          "description": "The first date to work out. Today if left empty."
+        },
+        "days": {
+          "name": "Number of days",
+          "description": "How many dates to work out."
+        },
+        "schedule_file": {
+          "name": "Schedule file",
+          "description": "The schedule file in the configuration folder."
+        },
+        "output_file": {
+          "name": "Output file",
+          "description": "If given, the list is also written to this file in the configuration folder."
+        }
+      }
+    }
+  }
+}
