@@ -248,7 +248,10 @@ async def test_a_fortnight_runs_exactly_what_the_engine_lists(house):
     await house.reload_schedule()
     expected = await _walk(house, schedule, 14)
     assert house.scene_times() == expected
-    assert {scene for _, scene in expected} == {"scene.weekday", "scene.friday", "scene.shabbos"}
+    # The fortnight from 23 November 2026 reaches the first nights of Chanukah.
+    assert {scene for _, scene in expected} == {
+        "scene.weekday", "scene.friday", "scene.shabbos", "scene.chanukah",
+    }
 
 
 async def test_a_whole_year_runs_exactly_what_the_engine_lists(house):
