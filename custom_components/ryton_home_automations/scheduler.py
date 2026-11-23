@@ -110,9 +110,9 @@ class Scheduler:
         check_schedule(schedule)
         changes = await self._async_apply_calendar_settings(schedule["settings"])
         self.schedule = schedule
-        if self.last_run is None:
-            # From now on, anything not run counts as missed.
-            self.last_run = dt_util.now()
+        # A new schedule starts from now: nothing timed earlier is replayed,
+        # and anything timed later that does not run counts as missed.
+        self.last_run = dt_util.now()
         await self._async_save()
         await self.async_rebuild(recover=False)
         return changes
@@ -138,8 +138,9 @@ class Scheduler:
         """Fix the lists for yesterday and today and set their timers.
 
         Yesterday's list is included because a Night may run after midnight.
-        With ``recover``, automations missed since the engine last ran are
-        caught up.
+        With ``recover``, automations that came due since the engine last ran
+        and did not run are caught up. That is used at startup and at the
+        rollover. It is not used when a new schedule is loaded.
         """
         self._cancel_timers()
         self.day_lists, self.upcoming = [], []
@@ -167,6 +168,10 @@ class Scheduler:
             except ENGINE_ERRORS as err:
                 self._report(f"The list for {day} could not be fixed: {err}")
 
+        # Reading the calendar took a moment, and the timers were off
+        # meanwhile. Anything that came due in that moment, or just before
+        # the rebuild began, is in ``missed`` and must not be lost.
+        now = dt_util.now()
         missed, self.upcoming = split_due(self.day_lists, self.last_run, now)
         for automation in self.upcoming:
             self._timers.append(
@@ -192,7 +197,9 @@ class Scheduler:
 
     @callback
     def _at_rollover(self, now: datetime) -> None:
-        self.hass.async_create_task(self.async_rebuild(recover=False))
+        # With catch-up, so an automation due at the moment of the rollover
+        # still runs.
+        self.hass.async_create_task(self.async_rebuild(recover=True))
 
     def _timer_for(self, automation: ScheduledAutomation):
         async def fire(now: datetime) -> None:
