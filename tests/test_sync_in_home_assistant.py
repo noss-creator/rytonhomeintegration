@@ -10,10 +10,11 @@ these tests run on Linux.
 
 from __future__ import annotations
 
-import aiohttp
 import pytest
 
 pytest.importorskip("pytest_homeassistant_custom_component.common")
+
+import aiohttp  # noqa: E402
 
 from homeassistant.core import HomeAssistant  # noqa: E402
 from homeassistant.data_entry_flow import FlowResultType  # noqa: E402
