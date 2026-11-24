@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, Supp
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.start import async_at_started
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .calendar_reader import async_read_calendar
@@ -270,6 +271,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(scheduler.async_stop)
     entry.async_on_unload(syncer.async_stop)
     return True
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Removing the integration from a house removes everything it stored there.
+
+    Otherwise the schedule it last ran would come back, and run, the next
+    time the integration is added.
+    """
+    for name in ("state", "sync"):
+        await Store(hass, 1, f"{DOMAIN}.{name}").async_remove()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

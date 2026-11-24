@@ -240,3 +240,36 @@ async def test_the_year_preview_is_sent_once_a_schedule_is_running(paired, aiocl
 
     await sync_now(paired.hass)
     assert len(calls_to(aioclient_mock, "automations_put_preview")) == 1
+
+
+# --- starting over ----------------------------------------------------------
+
+
+async def test_paired_with_another_house_the_room_list_is_sent_again(paired, aioclient_mock):
+    assert len(calls_to(aioclient_mock, "automations_put_inventory")) == 1
+    hass = paired.hass
+    other_key = "n" * 64
+    hass.config_entries.async_update_entry(
+        paired.entry,
+        data={"house_id": "another-house", "house_name": "Other", "house_key": other_key},
+    )
+    await hass.config_entries.async_reload(paired.entry.entry_id)
+    await hass.async_block_till_done()
+
+    calls = calls_to(aioclient_mock, "automations_put_inventory")
+    assert len(calls) == 2
+    assert calls[1][2]["house_key"] == other_key
+
+
+async def test_removing_the_integration_removes_what_it_stored(paired, aioclient_mock):
+    from homeassistant.helpers.storage import Store
+
+    hass = paired.hass
+    publish(aioclient_mock, {"revision": 5, "schedule": published(5)})
+    await sync_now(hass)
+    assert (await Store(hass, 1, f"{DOMAIN}.state").async_load())["schedule"]["revision"] == 5
+
+    await hass.config_entries.async_remove(paired.entry.entry_id)
+    await hass.async_block_till_done()
+    assert await Store(hass, 1, f"{DOMAIN}.state").async_load() is None
+    assert await Store(hass, 1, f"{DOMAIN}.sync").async_load() is None

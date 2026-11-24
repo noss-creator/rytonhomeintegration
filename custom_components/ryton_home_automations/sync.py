@@ -62,6 +62,10 @@ class Syncer:
 
     async def async_load(self) -> None:
         self._sent = await self._store.async_load() or {}
+        # What was sent went to one house on the website. Paired with another,
+        # or with the same one made anew, everything is sent again.
+        if self._sent.get("house_id") != self.house_id:
+            self._sent = {"house_id": self.house_id}
 
     @callback
     def async_start(self) -> None:
