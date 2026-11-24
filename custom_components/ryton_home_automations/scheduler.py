@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
@@ -85,6 +86,7 @@ class Scheduler:
         self._rollover: CALLBACK_TYPE | None = None
         self._running = asyncio.Lock()
         self._run_through: asyncio.Task[None] | None = None
+        self.problems: deque[dict[str, str]] = deque(maxlen=50)
 
     # --- storage ----------------------------------------------------------
 
@@ -159,14 +161,14 @@ class Scheduler:
                 today + timedelta(days=LOOK_AHEAD_DAYS),
             )
         except (CalendarDataError, HomeAssistantError) as err:
-            self._report(f"The Jewish Calendar could not be read, so nothing is scheduled: {err}")
+            self.report(f"The Jewish Calendar could not be read, so nothing is scheduled: {err}")
             return
 
         for day in (yesterday, today):
             try:
                 self.day_lists.append(build_day_list(self.schedule, day, calendar, tz))
             except ENGINE_ERRORS as err:
-                self._report(f"The list for {day} could not be fixed: {err}")
+                self.report(f"The list for {day} could not be fixed: {err}")
 
         # Reading the calendar took a moment, and the timers were off
         # meanwhile. Anything that came due in that moment, or just before
@@ -221,7 +223,7 @@ class Scheduler:
         try:
             rooms = latest_state([automation.rooms for automation in missed])
         except ScheduleError as err:
-            self._report(f"Could not catch up after a restart: {err}")
+            self.report(f"Could not catch up after a restart: {err}")
             return
         await self._async_carry_out(rooms, "Catching up after a restart", merged=True)
         self.last_run = now
@@ -253,7 +255,7 @@ class Scheduler:
             )
         except ScheduleError as err:
             if report:
-                self._report(f"{name} could not run: {err}")
+                self.report(f"{name} could not run: {err}")
             return [f"could not run: {err}"]
 
         async with self._running:
@@ -271,7 +273,7 @@ class Scheduler:
         lines = [f"{failure.call.entity_id}: {failure.reason}" for failure in failures]
         if lines and report:
             listed = "\n".join(f"- {line}" for line in lines)
-            self._report(f"{name}: {len(lines)} still failing after three tries.\n{listed}")
+            self.report(f"{name}: {len(lines)} still failing after three tries.\n{listed}")
         return lines
 
     # --- running through automations back to back ---------------------------
@@ -333,7 +335,7 @@ class Scheduler:
             f"{len(items)} automations run, {failed} entities failed."
         )
         await write_report("\n".join([summary, "", *lines]) + "\n")
-        self._report(summary)
+        self.report(summary)
 
     async def _async_send(self, call: Call) -> None:
         await self.hass.services.async_call(
@@ -351,9 +353,13 @@ class Scheduler:
 
     # --- reporting and stopping -------------------------------------------
 
-    def _report(self, message: str) -> None:
-        """Report a problem in the log and as a notification in Home Assistant."""
+    def report(self, message: str) -> None:
+        """Report a problem in the log and as a notification in Home Assistant.
+
+        The latest problems are also kept, to be sent to the website.
+        """
         _LOGGER.warning(message)
+        self.problems.append({"at": dt_util.now().isoformat(timespec="seconds"), "message": message})
         persistent_notification.async_create(
             self.hass,
             message,

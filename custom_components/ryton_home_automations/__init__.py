@@ -30,11 +30,13 @@ from .engine.day_list import build_day_list
 from .engine.run_through import automations_of_dates, every_automation
 from .engine.time_resolver import ScheduleError
 from .scheduler import ENGINE_ERRORS, Scheduler
+from .sync import Syncer
 
 SERVICE_PREVIEW = "preview"
 SERVICE_RELOAD_SCHEDULE = "reload_schedule"
 SERVICE_RUN_THROUGH = "run_through"
 SERVICE_STOP_RUN_THROUGH = "stop_run_through"
+SERVICE_SYNC_NOW = "sync_now"
 
 PREVIEW_SCHEMA = vol.Schema(
     {
@@ -97,6 +99,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Ryton Home Automations."""
     scheduler = Scheduler(hass)
     await scheduler.async_load()
+    syncer = Syncer(hass, entry, scheduler)
+    await syncer.async_load()
 
     async def handle_preview(call: ServiceCall) -> ServiceResponse:
         """Work out the day and the times of a span of dates. Switches nothing."""
@@ -212,6 +216,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def handle_stop_run_through(call: ServiceCall) -> ServiceResponse:
         return {"stopped": scheduler.async_stop_run_through()}
 
+    async def handle_sync_now(call: ServiceCall) -> ServiceResponse:
+        """Check the website for a newer schedule now."""
+        result = await syncer.async_sync()
+        schedule = scheduler.schedule or {}
+        return {
+            "paired": syncer.paired,
+            "house_id": syncer.house_id,
+            "result": result,
+            "revision": schedule.get("revision"),
+        }
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SYNC_NOW,
+        handle_sync_now,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     hass.services.async_register(
         DOMAIN,
         SERVICE_RUN_THROUGH,
@@ -243,9 +264,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def started(hass: HomeAssistant) -> None:
         """Once Home Assistant is up, fix today's list and catch up on anything missed."""
         await scheduler.async_rebuild(recover=True)
+        syncer.async_start()
 
     entry.async_on_unload(async_at_started(hass, started))
     entry.async_on_unload(scheduler.async_stop)
+    entry.async_on_unload(syncer.async_stop)
     return True
 
 
@@ -255,4 +278,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, SERVICE_RELOAD_SCHEDULE)
     hass.services.async_remove(DOMAIN, SERVICE_RUN_THROUGH)
     hass.services.async_remove(DOMAIN, SERVICE_STOP_RUN_THROUGH)
+    hass.services.async_remove(DOMAIN, SERVICE_SYNC_NOW)
     return True

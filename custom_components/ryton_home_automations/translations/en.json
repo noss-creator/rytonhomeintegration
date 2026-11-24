@@ -3,11 +3,33 @@
     "step": {
       "user": {
         "title": "Ryton Home Automations",
-        "description": "Add Ryton Home Automations to this house?"
+        "description": "Add Ryton Home Automations to this house.",
+        "data": {
+          "pairing_code": "Pairing code"
+        },
+        "data_description": {
+          "pairing_code": "The code from the website for this house. Leave empty for a house with no internet that runs from a schedule file."
+        }
+      },
+      "reconfigure": {
+        "title": "Pair with the website",
+        "description": "Enter a new pairing code from the website for this house. Pairing again replaces the house's earlier key.",
+        "data": {
+          "pairing_code": "Pairing code"
+        },
+        "data_description": {
+          "pairing_code": "The code from the website for this house. Leave empty for a house with no internet that runs from a schedule file."
+        }
       }
     },
     "abort": {
-      "single_instance_allowed": "Ryton Home Automations is already added."
+      "single_instance_allowed": "Ryton Home Automations is already added.",
+      "reconfigure_successful": "This house is now paired with the website."
+    },
+    "error": {
+      "invalid_pairing_code": "That pairing code was not accepted. It may be mistyped, already used, or expired.",
+      "cannot_connect": "The website could not be reached. Check the internet connection and try again.",
+      "pairing_code_needed": "Enter a pairing code."
     }
   },
   "services": {
@@ -72,6 +94,10 @@
     "stop_run_through": {
       "name": "Stop run-through",
       "description": "Stops a run-through that is in progress."
+    },
+    "sync_now": {
+      "name": "Sync now",
+      "description": "Checks the website for a newer schedule now, and sends the house's room list and year preview if they changed."
     }
   }
 }

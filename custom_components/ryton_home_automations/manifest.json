@@ -1,14 +1,19 @@
 {
   "domain": "ryton_home_automations",
   "name": "Ryton Home Automations",
-  "after_dependencies": ["jewish_calendar"],
+  "after_dependencies": [
+    "jewish_calendar"
+  ],
   "codeowners": [],
   "config_flow": true,
-  "dependencies": ["calendar", "persistent_notification"],
+  "dependencies": [
+    "calendar",
+    "persistent_notification"
+  ],
   "documentation": "https://automations.rytonhome.com",
   "integration_type": "service",
-  "iot_class": "calculated",
+  "iot_class": "cloud_polling",
   "requirements": [],
   "single_config_entry": true,
-  "version": "0.2.0"
+  "version": "0.3.0"
 }

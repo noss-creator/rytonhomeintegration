@@ -91,6 +91,7 @@ class House:
         self.light_calls: list[tuple[str, str]] = []
         self.ignore: dict[str, int] = {}
         self.entry = None
+        self.entry_data: dict = {}
 
     async def move_to(self, when: datetime) -> None:
         self.freezer.move_to(when)
@@ -107,7 +108,9 @@ class House:
 
     async def start_integration(self) -> None:
         if self.entry is None:
-            self.entry = MockConfigEntry(domain=DOMAIN, title="Ryton Home Automations")
+            self.entry = MockConfigEntry(
+                domain=DOMAIN, title="Ryton Home Automations", data=self.entry_data
+            )
             self.entry.add_to_hass(self.hass)
         assert await self.hass.config_entries.async_setup(self.entry.entry_id)
         await self.hass.async_block_till_done()
