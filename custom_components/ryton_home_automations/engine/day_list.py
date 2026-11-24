@@ -18,6 +18,7 @@ from typing import Any
 from .alongside import alongside_for
 from .calendar_source import CalendarSource
 from .day_resolver import ResolvedDay, resolve_day
+from .scenes import schedule_scenes
 from .day_tables import CHOL_HAMOED, table_for
 from .time_resolver import (
     ScheduleError,
@@ -60,6 +61,7 @@ def check_schedule(schedule: Mapping[str, Any]) -> None:
     for key in ("settings", "days"):
         if not isinstance(schedule.get(key), Mapping):
             raise ScheduleError(f"The schedule has no {key}")
+    schedule_scenes(schedule)
 
 
 def _day_entry(schedule: Mapping[str, Any], day_id: str) -> Mapping[str, Any]:

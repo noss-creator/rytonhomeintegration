@@ -44,6 +44,7 @@ from .engine.due import split_due
 from .engine.preview import LOOK_AHEAD_DAYS, LOOK_BACK_DAYS
 from .engine.run_through import RunThroughItem
 from .engine.runner import CHECK_WAIT_SECONDS, carry_out
+from .engine.scenes import expand_scenes, schedule_scenes
 from .engine.time_resolver import (
     PastRolloverError,
     ScheduleError,
@@ -87,6 +88,17 @@ class Scheduler:
         self._running = asyncio.Lock()
         self._run_through: asyncio.Task[None] | None = None
         self.problems: deque[dict[str, str]] = deque(maxlen=50)
+        self._listeners: list[Callable[[], Awaitable[None]]] = []
+
+    def async_listen(self, listener: Callable[[], Awaitable[None]]) -> CALLBACK_TYPE:
+        """Call ``listener`` each time the house takes a schedule."""
+        self._listeners.append(listener)
+
+        def stop() -> None:
+            if listener in self._listeners:
+                self._listeners.remove(listener)
+
+        return stop
 
     # --- storage ----------------------------------------------------------
 
@@ -116,6 +128,8 @@ class Scheduler:
         # and anything timed later that does not run counts as missed.
         self.last_run = dt_util.now()
         await self._async_save()
+        for listener in list(self._listeners):
+            await listener()
         await self.async_rebuild(recover=False)
         return changes
 
@@ -246,6 +260,9 @@ class Scheduler:
         group_size = pacing.get("group_size", 5)
         pause_seconds = pacing.get("pause_seconds", 1)
         try:
+            # A room that uses one of the schedule's own scenes gets that
+            # scene's entities, so each is paced, checked and retried.
+            rooms = expand_scenes(rooms, schedule_scenes(self.schedule))
             steps = plan_steps(
                 rooms,
                 fade_seconds=fade_seconds,
@@ -275,6 +292,21 @@ class Scheduler:
             listed = "\n".join(f"- {line}" for line in lines)
             self.report(f"{name}: {len(lines)} still failing after three tries.\n{listed}")
         return lines
+
+    async def async_run_scene(self, scene_id: str, fade_seconds: float = 0) -> None:
+        """Set one of the schedule's own scenes, as when it is turned on by hand."""
+        try:
+            scene = schedule_scenes(self.schedule).get(scene_id)
+        except ScheduleError:
+            scene = None
+        if scene is None:
+            self.report(f"The scene {scene_id} is not in the schedule")
+            return
+        await self._async_carry_out(
+            {scene["room"]: {"entities": scene["entities"]}},
+            f"The scene {scene['name']}",
+            fade_seconds=fade_seconds,
+        )
 
     # --- running through automations back to back ---------------------------
 

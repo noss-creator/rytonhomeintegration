@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
@@ -32,6 +33,8 @@ from .engine.run_through import automations_of_dates, every_automation
 from .engine.time_resolver import ScheduleError
 from .scheduler import ENGINE_ERRORS, Scheduler
 from .sync import Syncer
+
+PLATFORMS = [Platform.SCENE]
 
 SERVICE_PREVIEW = "preview"
 SERVICE_RELOAD_SCHEDULE = "reload_schedule"
@@ -102,6 +105,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await scheduler.async_load()
     syncer = Syncer(hass, entry, scheduler)
     await syncer.async_load()
+    # The schedule's own scenes are offered from the stored schedule.
+    entry.runtime_data = scheduler
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     async def handle_preview(call: ServiceCall) -> ServiceResponse:
         """Work out the day and the times of a span of dates. Switches nothing."""
@@ -285,6 +291,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload Ryton Home Automations."""
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
     hass.services.async_remove(DOMAIN, SERVICE_PREVIEW)
     hass.services.async_remove(DOMAIN, SERVICE_RELOAD_SCHEDULE)
     hass.services.async_remove(DOMAIN, SERVICE_RUN_THROUGH)

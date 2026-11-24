@@ -130,6 +130,10 @@ async def house(hass: HomeAssistant, freezer, tmp_path, monkeypatch):
     hass.config.config_dir = str(tmp_path)
     freezer.move_to(local(START, "03:00"))
     assert await async_setup_component(hass, "calendar", {})
+    # The real scenes are set up first, so the recorder below is what a
+    # scene being turned on reaches.
+    assert await async_setup_component(hass, "scene", {})
+    await hass.async_block_till_done()
     home = House(hass, freezer, tmp_path)
 
     async def get_events(call: ServiceCall):
