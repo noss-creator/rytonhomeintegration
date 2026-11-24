@@ -253,8 +253,10 @@ async def test_paired_with_another_house_the_room_list_is_sent_again(paired, aio
         paired.entry,
         data={"house_id": "another-house", "house_name": "Other", "house_key": other_key},
     )
-    await hass.config_entries.async_reload(paired.entry.entry_id)
-    await hass.async_block_till_done()
+    # The house fixture replaces Home Assistant's reload by a recorder, so the
+    # integration is stopped and started instead.
+    await paired.stop_integration()
+    await paired.start_integration()
 
     calls = calls_to(aioclient_mock, "automations_put_inventory")
     assert len(calls) == 2
