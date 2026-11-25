@@ -29,3 +29,6 @@ jobs:
           pytest -q -o asyncio_mode=auto
           tests/test_in_home_assistant.py tests/test_time_travel.py
           tests/test_sync_in_home_assistant.py
+          tests/test_changes_in_home_assistant.py
+          tests/test_calendar_in_home_assistant.py
+          tests/test_scenes_in_home_assistant.py

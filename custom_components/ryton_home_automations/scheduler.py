@@ -15,7 +15,7 @@ import logging
 import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Collection, Mapping
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -106,6 +106,10 @@ class Scheduler:
         # For each automation of the fixed lists: its key, and the rooms
         # skipped on its date.
         self._of: dict[int, tuple[str, frozenset[str]]] = {}
+        # Tomorrow's list, for showing what comes next once today is done.
+        # Nothing runs from it.
+        self.next_day: DayList | None = None
+        self._list_listeners: list[Callable[[], None]] = []
 
     def async_listen(self, listener: Callable[[], Awaitable[None]]) -> CALLBACK_TYPE:
         """Call ``listener`` each time the house takes a schedule."""
@@ -116,6 +120,69 @@ class Scheduler:
                 self._listeners.remove(listener)
 
         return stop
+
+    @callback
+    def async_listen_lists(self, listener: Callable[[], None]) -> CALLBACK_TYPE:
+        """Call ``listener`` each time the lists are fixed or an automation runs."""
+        self._list_listeners.append(listener)
+
+        def stop() -> None:
+            if listener in self._list_listeners:
+                self._list_listeners.remove(listener)
+
+        return stop
+
+    @callback
+    def _lists_changed(self) -> None:
+        for listener in list(self._list_listeners):
+            listener()
+
+    def next_automation(self) -> tuple[DayList, ScheduledAutomation] | None:
+        """The next automation to run, with the list it belongs to."""
+        now = dt_util.now()
+        lists = [*self.day_lists, *([self.next_day] if self.next_day else [])]
+        found = [
+            (day_list, automation)
+            for day_list in lists
+            for automation in day_list.automations
+            if automation.time > now
+            and f"{day_list.date.isoformat()}|{automation.id}" not in self._ran
+        ]
+        return min(found, key=lambda pair: pair[1].time) if found else None
+
+    async def async_day_lists(self, first: date, last: date) -> list[DayList]:
+        """Work out the lists of a span of dates, with the client's changes on top.
+
+        For showing only. A date whose list cannot be fixed is left out.
+        """
+        if self.schedule is None or last < first:
+            return []
+        tz = ZoneInfo(self.hass.config.time_zone)
+        try:
+            calendar = await async_read_calendar(
+                self.hass,
+                first - timedelta(days=LOOK_BACK_DAYS),
+                last + timedelta(days=LOOK_AHEAD_DAYS),
+            )
+        except (CalendarDataError, HomeAssistantError):
+            return []
+        schedule, changes, rooms_off = self.schedule, list(self.changes), list(self.rooms_off)
+
+        def build() -> list[DayList]:
+            lists = []
+            for n in range((last - first).days + 1):
+                day = first + timedelta(days=n)
+                try:
+                    lists.append(
+                        build_day_list(
+                            schedule, day, calendar, tz, changes=changes, rooms_off=rooms_off
+                        )
+                    )
+                except ENGINE_ERRORS:
+                    continue
+            return lists
+
+        return await self.hass.async_add_executor_job(build)
 
     # --- storage ----------------------------------------------------------
 
@@ -241,6 +308,13 @@ class Scheduler:
     # --- fixing the day's list --------------------------------------------
 
     async def async_rebuild(self, *, recover: bool) -> None:
+        """Fix the lists and tell whatever shows them."""
+        try:
+            await self._async_rebuild(recover=recover)
+        finally:
+            self._lists_changed()
+
+    async def _async_rebuild(self, *, recover: bool) -> None:
         """Fix the lists for yesterday and today and set their timers.
 
         Yesterday's list is included because a Night may run after midnight.
@@ -251,6 +325,7 @@ class Scheduler:
         self._cancel_timers()
         self.day_lists, self.upcoming = [], []
         self._of = {}
+        self.next_day = None
         if self.schedule is None:
             return
 
@@ -300,6 +375,19 @@ class Scheduler:
                 _LOGGER.info(
                     "Temporary change %s is not applied on %s: %s", change_id, day, reason
                 )
+
+        try:
+            self.next_day = build_day_list(
+                self.schedule,
+                today + timedelta(days=1),
+                calendar,
+                tz,
+                changes=self.changes,
+                rooms_off=self.rooms_off,
+            )
+        except ENGINE_ERRORS:
+            # Reported when its own day comes.
+            self.next_day = None
 
         days = {yesterday.isoformat(), today.isoformat()}
         self._ran = {key for key in self._ran if key.split("|", 1)[0] in days}
@@ -354,6 +442,7 @@ class Scheduler:
             if self.last_run is None or automation.time > self.last_run:
                 self.last_run = automation.time
             await self._async_save()
+            self._lists_changed()
 
         return fire
 

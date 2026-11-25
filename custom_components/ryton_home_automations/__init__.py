@@ -35,7 +35,7 @@ from .engine.time_resolver import ScheduleError
 from .scheduler import ENGINE_ERRORS, Scheduler
 from .sync import Syncer
 
-PLATFORMS = [Platform.SCENE]
+PLATFORMS = [Platform.CALENDAR, Platform.SCENE, Platform.SENSOR]
 
 SERVICE_PREVIEW = "preview"
 SERVICE_RELOAD_SCHEDULE = "reload_schedule"
