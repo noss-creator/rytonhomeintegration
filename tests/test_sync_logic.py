@@ -125,3 +125,20 @@ def test_an_empty_house():
     assert build_inventory([], [], []) == {
         "floors": [], "rooms_with_no_floor": [], "entities_with_no_room": [],
     }
+
+
+def test_what_a_scene_sets_is_sent_with_it():
+    sets = {"light.kitchen_spots": "On, 75%"}
+    inventory = build_inventory(
+        [],
+        [{"id": "kitchen", "name": "Kitchen", "floor_id": None}],
+        [
+            {"entity_id": "scene.kitchen_day", "name": "Kitchen Day", "area_id": "kitchen", "sets": sets},
+            {"entity_id": "light.kitchen_spots", "name": "Spots", "area_id": "kitchen", "sets": {}},
+        ],
+    )
+    [room] = inventory["rooms_with_no_floor"]
+    assert room["entities"] == [
+        {"entity_id": "light.kitchen_spots", "name": "Spots"},
+        {"entity_id": "scene.kitchen_day", "name": "Kitchen Day", "sets": sets},
+    ]

@@ -6,7 +6,7 @@ import pytest
 
 from engine.actions import latest_state, plan_steps
 from engine.day_list import check_schedule
-from engine.scenes import describe_action, entity_id_of, expand_scenes, schedule_scenes
+from engine.scenes import describe_action, describe_state, entity_id_of, expand_scenes, schedule_scenes
 from engine.time_resolver import ScheduleError
 
 from .test_day_list import make_schedule
@@ -267,3 +267,28 @@ def test_after_a_restart_entities_set_after_the_scene_win():
 )
 def test_what_a_scene_does_to_an_entity_is_said_in_words(action, words):
     assert describe_action(action) == words
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "state", "attributes", "words"),
+    [
+        ("light.a", "on", {}, "On"),
+        ("light.a", "off", {"brightness": 100}, "Off"),
+        ("light.a", "on", {"brightness": 191}, "On, 75%"),
+        ("light.a", "on", {"brightness": 255}, "On, 100%"),
+        ("switch.a", "on", {}, "On"),
+        ("switch.a", "off", {}, "Off"),
+        ("cover.a", "open", {}, "Open"),
+        ("cover.a", "closed", {}, "Closed"),
+        ("cover.a", "open", {"current_position": 50}, "50% open"),
+        ("cover.a", "open", {"current_position": 100}, "Open"),
+        ("cover.a", "closed", {"current_position": 0}, "Closed"),
+        ("select.a", "Sabbath", {}, "Sabbath"),
+        ("input_select.a", "eco mode", {}, "eco mode"),
+        ("input_boolean.a", "on", {}, "On"),
+    ],
+)
+def test_the_state_a_home_assistant_scene_gives_is_said_in_words(
+    entity_id, state, attributes, words
+):
+    assert describe_state(entity_id, state, attributes) == words

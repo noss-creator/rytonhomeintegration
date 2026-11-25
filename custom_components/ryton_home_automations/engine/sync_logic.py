@@ -61,7 +61,8 @@ def build_inventory(
     ``floors`` have ``id``, ``name`` and ``level``. ``areas`` have ``id``,
     ``name`` and ``floor_id``. ``entities`` have ``entity_id``, ``name``,
     ``area_id`` and whatever the entity supports (``options``, ``dimmable``,
-    ``position``). Entities of other kinds are left out. Everything is sorted,
+    ``position``), and for a scene ``sets``: what it sets each of its entities
+    to, in words. Entities of other kinds are left out. Everything is sorted,
     so the same house always gives the same result.
     """
     by_room: dict[str | None, list[dict[str, Any]]] = {}
@@ -70,7 +71,7 @@ def build_inventory(
         if entity_id.split(".", 1)[0] not in SCHEDULABLE_DOMAINS:
             continue
         record = {"entity_id": entity_id, "name": entity.get("name") or entity_id}
-        for key in ("options", "dimmable", "position"):
+        for key in ("options", "dimmable", "position", "sets"):
             if entity.get(key):
                 record[key] = entity[key]
         by_room.setdefault(entity.get("area_id"), []).append(record)

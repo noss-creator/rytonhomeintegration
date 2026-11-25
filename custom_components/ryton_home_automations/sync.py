@@ -32,6 +32,7 @@ from .calendar_reader import async_read_calendar
 from .const import CONF_HOUSE_ID, CONF_HOUSE_KEY, DOMAIN, SYNC_MINUTES
 from .engine.calendar_snapshot import CalendarDataError
 from .engine.preview import LOOK_AHEAD_DAYS, LOOK_BACK_DAYS, build_preview
+from .engine.scenes import describe_state
 from .engine.sync_logic import accept_schedule, build_inventory, fingerprint
 from .engine.time_resolver import ScheduleError
 from .scheduler import Scheduler
@@ -167,6 +168,7 @@ class Syncer:
             modes = attributes.get("supported_color_modes") or []
             entities.append(
                 {
+                    "sets": self._scene_sets(entry.entity_id),
                     "entity_id": entry.entity_id,
                     "name": (state.name if state else None)
                     or entry.name
@@ -182,6 +184,26 @@ class Syncer:
                 }
             )
         return build_inventory(floors, areas, entities)
+
+    def _scene_sets(self, entity_id: str) -> dict[str, str]:
+        """What a scene made in Home Assistant sets each of its entities to, in words.
+
+        Empty for anything else, and for a scene whose contents cannot be read.
+        """
+        if not entity_id.startswith("scene."):
+            return {}
+        component = self.hass.data.get("scene")
+        scene = component.get_entity(entity_id) if component is not None else None
+        states = getattr(getattr(scene, "scene_config", None), "states", None)
+        if not isinstance(states, dict):
+            return {}
+        try:
+            return {
+                str(inside): describe_state(str(inside), state.state, state.attributes)
+                for inside, state in sorted(states.items())
+            }
+        except (AttributeError, TypeError, ValueError):
+            return {}
 
     async def _async_send(self, what: str, function: str, mark: str, **payload: Any) -> None:
         """Send something to the website unless this exact thing was sent already."""

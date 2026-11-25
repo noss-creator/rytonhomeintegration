@@ -45,6 +45,27 @@ def describe_action(action: Mapping[str, Any]) -> str:
     )
 
 
+def describe_state(entity_id: str, state: str, attributes: Mapping[str, Any]) -> str:
+    """Say in words the state a Home Assistant scene gives an entity, as "On, 75%"."""
+    domain = entity_id.split(".", 1)[0]
+    if domain == "cover":
+        position = attributes.get("current_position", attributes.get("position"))
+        if isinstance(position, (int, float)) and not isinstance(position, bool):
+            if 0 < position < 100:
+                return f"{position:g}% open"
+            return "Open" if position else "Closed"
+    if domain == "light" and state == "on":
+        brightness = attributes.get("brightness")
+        if isinstance(brightness, (int, float)) and not isinstance(brightness, bool):
+            return f"On, {round(brightness * 100 / 255)}%"
+        percent = attributes.get("brightness_pct")
+        if isinstance(percent, (int, float)) and not isinstance(percent, bool):
+            return f"On, {percent:g}%"
+    if domain in ("select", "input_select"):
+        return str(state)
+    return str(state).replace("_", " ").capitalize()
+
+
 def schedule_scenes(schedule: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Return the schedule's own scenes by identifier, or raise ScheduleError.
 
