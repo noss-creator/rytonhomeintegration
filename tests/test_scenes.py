@@ -6,7 +6,7 @@ import pytest
 
 from engine.actions import latest_state, plan_steps
 from engine.day_list import check_schedule
-from engine.scenes import entity_id_of, expand_scenes, schedule_scenes
+from engine.scenes import describe_action, entity_id_of, expand_scenes, schedule_scenes
 from engine.time_resolver import ScheduleError
 
 from .test_day_list import make_schedule
@@ -247,3 +247,23 @@ def test_after_a_restart_entities_set_after_the_scene_win():
         ("light.spots", "turn_off"),
         ("switch.hot_plate", "turn_off"),
     ]
+
+
+# --- saying what a scene does --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("action", "words"),
+    [
+        (ON, "On"),
+        (OFF, "Off"),
+        ({"state": "on", "brightness_pct": 75}, "On, 75%"),
+        ({"state": "on", "brightness_pct": 12.5}, "On, 12.5%"),
+        ({"state": "open"}, "Open"),
+        ({"state": "closed"}, "Closed"),
+        ({"position": 50}, "50% open"),
+        ({"option": "Eco"}, "Eco"),
+    ],
+)
+def test_what_a_scene_does_to_an_entity_is_said_in_words(action, words):
+    assert describe_action(action) == words

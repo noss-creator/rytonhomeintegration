@@ -135,3 +135,20 @@ async def test_the_scenes_come_back_after_a_restart_with_no_website(house):
     await scene.async_activate()
     await house.hass.async_block_till_done()
     assert ("light.a", "turn_on") in house.light_calls
+
+
+async def test_the_scene_shows_what_it_does(house):
+    lights(house)
+    house.hass.states.async_set("light.a", "off", {"friendly_name": "Spots"})
+    entities = {"light.a": {"state": "on", "brightness_pct": 75}, "light.b": {"state": "off"}}
+    await publish(house, with_scene(used=False, entities=entities))
+
+    shown = house.hass.states.get(SUPPER).attributes
+    assert shown["entity_id"] == ["light.a", "light.b"]
+    assert shown["Spots"] == "On, 75%"
+    assert "fade_seconds" not in shown
+
+    # A change to the scene in the schedule shows here too.
+    entities["light.a"] = {"state": "off"}
+    await publish(house, with_scene(used=False, entities=entities))
+    assert house.hass.states.get(SUPPER).attributes["Spots"] == "Off"

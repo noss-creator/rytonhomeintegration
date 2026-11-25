@@ -17,7 +17,7 @@ from homeassistant.helpers import area_registry as ar, entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .engine.scenes import entity_id_of, schedule_scenes
+from .engine.scenes import describe_action, entity_id_of, schedule_scenes
 from .engine.time_resolver import ScheduleError
 from .scheduler import Scheduler
 
@@ -38,17 +38,36 @@ class RytonScene(Scene):
         self._scheduler = scheduler
         self._scene_id: str = scene["id"]
         self._room: str = scene["room"]
+        self._entities: dict[str, Any] = scene["entities"]
+        self._fade: float = scene["fade_seconds"]
         self._attr_name = scene["name"]
         self._attr_unique_id = _unique_id(self._scene_id)
         # The identifier carries the prefix; the name people see does not.
         self.entity_id = entity_id_of(self._scene_id)
 
     def update_from(self, scene: dict[str, Any]) -> None:
-        """Take the scene's new name after the schedule changed."""
+        """Take the scene's new name and contents after the schedule changed."""
         self._room = scene["room"]
-        if self._attr_name != scene["name"]:
-            self._attr_name = scene["name"]
+        now = (scene["name"], scene["entities"], scene["fade_seconds"])
+        if now != (self._attr_name, self._entities, self._fade):
+            self._attr_name, self._entities, self._fade = now
             self.async_write_ha_state()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """What the scene does: each entity by name with what it is set to."""
+        shown: dict[str, Any] = {}
+        for entity_id, action in self._entities.items():
+            state = self.hass.states.get(entity_id) if self.hass else None
+            name = state.name if state else entity_id
+            if name in shown or name in ("entity_id", "fade_seconds", "friendly_name"):
+                name = entity_id
+            shown[name] = describe_action(action)
+        if self._fade:
+            shown["fade_seconds"] = self._fade
+        # As Home Assistant's own scenes do: the entities the scene sets.
+        shown["entity_id"] = list(self._entities)
+        return shown
 
     async def async_added_to_hass(self) -> None:
         """Place the scene in its room, unless someone already moved it."""

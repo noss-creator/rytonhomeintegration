@@ -31,6 +31,20 @@ def entity_id_of(scene_id: str) -> str:
     return f"scene.{scene_id}"
 
 
+def describe_action(action: Mapping[str, Any]) -> str:
+    """Say in words what a scene does to one entity, as "On, 75%"."""
+    if "option" in action:
+        return str(action["option"])
+    if "position" in action:
+        return f"{action['position']:g}% open"
+    state = action.get("state")
+    if state == "on" and "brightness_pct" in action:
+        return f"On, {action['brightness_pct']:g}%"
+    return {"on": "On", "off": "Off", "open": "Open", "closed": "Closed"}.get(
+        state, str(state)
+    )
+
+
 def schedule_scenes(schedule: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Return the schedule's own scenes by identifier, or raise ScheduleError.
 
