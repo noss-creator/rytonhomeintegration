@@ -98,6 +98,58 @@
     "sync_now": {
       "name": "Sync now",
       "description": "Checks the website for a newer schedule now, and sends the house's room list and year preview if they changed."
+    },
+    "add_change": {
+      "name": "Add a temporary change",
+      "description": "Stores one of the client's temporary changes. It applies from now until its last date, then the house goes back to the schedule.",
+      "fields": {
+        "change": {
+          "name": "Change",
+          "description": "The change, in the temporary changes format: from, until, days, kind and what the kind needs."
+        }
+      }
+    },
+    "remove_change": {
+      "name": "Remove a temporary change",
+      "description": "Removes a temporary change before it runs out.",
+      "fields": {
+        "id": {
+          "name": "Identifier",
+          "description": "The change's identifier."
+        }
+      }
+    },
+    "list_changes": {
+      "name": "List temporary changes",
+      "description": "Returns the temporary changes and the rooms whose scheduling is switched off."
+    },
+    "set_room_scheduling": {
+      "name": "Set a room's scheduling",
+      "description": "Switches scheduling off for a room, so automations skip it, or back on. It stays until it is set again.",
+      "fields": {
+        "room": {
+          "name": "Room",
+          "description": "The room."
+        },
+        "scheduling": {
+          "name": "Scheduling",
+          "description": "On or off."
+        }
+      }
+    },
+    "days_in_dates": {
+      "name": "Days in a span of dates",
+      "description": "Returns which of the schedule's days occur between two dates, for choosing the days a temporary change touches.",
+      "fields": {
+        "from": {
+          "name": "From",
+          "description": "The first date."
+        },
+        "until": {
+          "name": "Until",
+          "description": "The last date."
+        }
+      }
     }
   }
 }

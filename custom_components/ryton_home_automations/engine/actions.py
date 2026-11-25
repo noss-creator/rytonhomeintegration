@@ -172,13 +172,14 @@ def latest_state(missed: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any
                 raise ScheduleError(f"{room}: the room is not understood")
             if "scene" in body:
                 combined[room] = {"scene": body["scene"], "entities": {}}
-            else:
-                now = combined.setdefault(room, {"entities": {}})
-                for entity_id, action in body.get("entities", {}).items():
-                    # Moved to the end, so entities run in the order they
-                    # were last set.
-                    now["entities"].pop(entity_id, None)
-                    now["entities"][entity_id] = action
+            # A room may hold a scene with entities set after it, where the
+            # client changed a room that uses a scene.
+            now = combined.setdefault(room, {"entities": {}})
+            for entity_id, action in (body.get("entities") or {}).items():
+                # Moved to the end, so entities run in the order they
+                # were last set.
+                now["entities"].pop(entity_id, None)
+                now["entities"][entity_id] = action
     return {
         room: {key: value for key, value in body.items() if value}
         for room, body in combined.items()

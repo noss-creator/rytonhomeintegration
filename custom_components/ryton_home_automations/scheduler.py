@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections import deque
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -33,6 +34,8 @@ from .const import DOMAIN
 from .engine.actions import Call, latest_state, plan_steps
 from .engine.calendar_settings import wanted_settings
 from .engine.calendar_snapshot import CalendarDataError
+from .engine.changes import FORMAT_VERSION as CHANGES_FORMAT_VERSION
+from .engine.changes import check_change, still_wanted
 from .engine.day_list import (
     DayList,
     ScheduledAutomation,
@@ -89,6 +92,20 @@ class Scheduler:
         self._run_through: asyncio.Task[None] | None = None
         self.problems: deque[dict[str, str]] = deque(maxlen=50)
         self._listeners: list[Callable[[], Awaitable[None]]] = []
+        # The client's temporary changes and room switches. They are kept
+        # apart from the schedule and never leave the house.
+        self.changes: list[dict[str, Any]] = []
+        self.rooms_off: list[str] = []
+        self._changes_store: Store[dict[str, Any]] = Store(
+            hass, STORAGE_VERSION, f"{DOMAIN}.changes"
+        )
+        # The automations of yesterday's and today's lists that have run,
+        # each as "date|identifier", so a change to a time never makes one
+        # run twice.
+        self._ran: set[str] = set()
+        # For each automation of the fixed lists: its key, and the rooms
+        # skipped on its date.
+        self._of: dict[int, tuple[str, frozenset[str]]] = {}
 
     def async_listen(self, listener: Callable[[], Awaitable[None]]) -> CALLBACK_TYPE:
         """Call ``listener`` each time the house takes a schedule."""
@@ -108,14 +125,86 @@ class Scheduler:
         self.schedule = stored.get("schedule")
         last_run = stored.get("last_run")
         self.last_run = dt_util.parse_datetime(last_run) if last_run else None
+        self._ran = {key for key in stored.get("ran") or () if isinstance(key, str)}
+
+        kept = await self._changes_store.async_load() or {}
+        changes = kept.get("changes")
+        rooms_off = kept.get("rooms_off")
+        self.changes = [c for c in changes if isinstance(c, dict)] if isinstance(changes, list) else []
+        self.rooms_off = (
+            [room for room in rooms_off if isinstance(room, str)]
+            if isinstance(rooms_off, list)
+            else []
+        )
 
     async def _async_save(self) -> None:
         await self._store.async_save(
             {
                 "schedule": self.schedule,
                 "last_run": self.last_run.isoformat() if self.last_run else None,
+                "ran": sorted(self._ran),
             }
         )
+
+    async def _async_save_changes(self) -> None:
+        await self._changes_store.async_save(
+            {
+                "format_version": CHANGES_FORMAT_VERSION,
+                "rooms_off": self.rooms_off,
+                "changes": self.changes,
+            }
+        )
+
+    # --- the client's temporary changes -----------------------------------
+
+    async def async_add_change(self, change: Mapping[str, Any]) -> dict[str, Any]:
+        """Store a temporary change and apply it from now. Return it as stored.
+
+        Raises ``ChangeError`` where the change is not understood.
+        """
+        made = {
+            **change,
+            "id": uuid.uuid4().hex[:8],
+            "made_at": dt_util.now().isoformat(timespec="seconds"),
+        }
+        check_change(made)
+        self.changes.append(made)
+        await self._async_save_changes()
+        await self._async_changes_made()
+        return made
+
+    async def async_remove_change(self, change_id: str) -> bool:
+        """Remove a temporary change. Return whether there was one."""
+        kept = [change for change in self.changes if change.get("id") != change_id]
+        if len(kept) == len(self.changes):
+            return False
+        self.changes = kept
+        await self._async_save_changes()
+        await self._async_changes_made()
+        return True
+
+    async def async_set_room_scheduling(self, room: str, on: bool) -> None:
+        """Set a room's own scheduling switch, which has no end date."""
+        rooms = [other for other in self.rooms_off if other != room]
+        if not on:
+            rooms.append(room)
+        self.rooms_off = rooms
+        await self._async_save_changes()
+        await self._async_changes_made()
+
+    async def _async_changes_made(self) -> None:
+        """Fix the lists again, so the automations still to run follow the changes.
+
+        An automation that has already run does not run again, whatever its
+        time becomes. One that has not run, and whose time is now past, runs
+        at once.
+        """
+        if self.last_run is not None:
+            for day_list in self.day_lists:
+                for automation in day_list.automations:
+                    if automation.time <= self.last_run:
+                        self._ran.add(f"{day_list.date.isoformat()}|{automation.id}")
+        await self.async_rebuild(recover=True)
 
     # --- taking a schedule ------------------------------------------------
 
@@ -127,6 +216,7 @@ class Scheduler:
         # A new schedule starts from now: nothing timed earlier is replayed,
         # and anything timed later that does not run counts as missed.
         self.last_run = dt_util.now()
+        self._ran = set()
         await self._async_save()
         for listener in list(self._listeners):
             await listener()
@@ -160,6 +250,7 @@ class Scheduler:
         """
         self._cancel_timers()
         self.day_lists, self.upcoming = [], []
+        self._of = {}
         if self.schedule is None:
             return
 
@@ -178,17 +269,48 @@ class Scheduler:
             self.report(f"The Jewish Calendar could not be read, so nothing is scheduled: {err}")
             return
 
+        # A change is dropped the day after its last date. Yesterday's list
+        # is still being fixed, so a change that ended yesterday is kept
+        # one more day.
+        wanted = still_wanted(self.changes, yesterday)
+        if len(wanted) != len(self.changes):
+            self.changes = wanted
+            await self._async_save_changes()
+
         for day in (yesterday, today):
             try:
-                self.day_lists.append(build_day_list(self.schedule, day, calendar, tz))
+                day_list = build_day_list(
+                    self.schedule,
+                    day,
+                    calendar,
+                    tz,
+                    changes=self.changes,
+                    rooms_off=self.rooms_off,
+                )
             except ENGINE_ERRORS as err:
                 self.report(f"The list for {day} could not be fixed: {err}")
+                continue
+            self.day_lists.append(day_list)
+            for automation in day_list.automations:
+                self._of[id(automation)] = (
+                    f"{day.isoformat()}|{automation.id}",
+                    day_list.rooms_off,
+                )
+            for change_id, reason in day_list.skipped_changes:
+                _LOGGER.info(
+                    "Temporary change %s is not applied on %s: %s", change_id, day, reason
+                )
+
+        days = {yesterday.isoformat(), today.isoformat()}
+        self._ran = {key for key in self._ran if key.split("|", 1)[0] in days}
 
         # Reading the calendar took a moment, and the timers were off
         # meanwhile. Anything that came due in that moment, or just before
         # the rebuild began, is in ``missed`` and must not be lost.
         now = dt_util.now()
         missed, self.upcoming = split_due(self.day_lists, self.last_run, now)
+        missed = [a for a in missed if self._of[id(a)][0] not in self._ran]
+        self.upcoming = [a for a in self.upcoming if self._of[id(a)][0] not in self._ran]
         for automation in self.upcoming:
             self._timers.append(
                 async_track_point_in_time(
@@ -218,13 +340,20 @@ class Scheduler:
         self.hass.async_create_task(self.async_rebuild(recover=True))
 
     def _timer_for(self, automation: ScheduledAutomation):
+        key, rooms_off = self._of.get(id(automation), ("", frozenset()))
+
         async def fire(now: datetime) -> None:
             await self._async_carry_out(
-                automation.rooms, automation.name, fade_seconds=automation.fade_seconds
+                automation.rooms,
+                automation.name,
+                fade_seconds=automation.fade_seconds,
+                rooms_off=rooms_off,
             )
+            if key:
+                self._ran.add(key)
             if self.last_run is None or automation.time > self.last_run:
                 self.last_run = automation.time
-                await self._async_save()
+            await self._async_save()
 
         return fire
 
@@ -239,7 +368,14 @@ class Scheduler:
         except ScheduleError as err:
             self.report(f"Could not catch up after a restart: {err}")
             return
-        await self._async_carry_out(rooms, "Catching up after a restart", merged=True)
+        # The rooms skipped are today's.
+        rooms_off = self.day_lists[-1].rooms_off if self.day_lists else frozenset()
+        await self._async_carry_out(
+            rooms, "Catching up", merged=True, rooms_off=rooms_off
+        )
+        self._ran.update(
+            self._of[id(automation)][0] for automation in missed if id(automation) in self._of
+        )
         self.last_run = now
         await self._async_save()
 
@@ -252,6 +388,7 @@ class Scheduler:
         *,
         fade_seconds: float = 0,
         merged: bool = False,
+        rooms_off: Collection[str] = (),
         check_wait: float = CHECK_WAIT_SECONDS,
         report: bool = True,
     ) -> list[str]:
@@ -265,12 +402,19 @@ class Scheduler:
             rooms = expand_scenes(
                 rooms, schedule_scenes(self.schedule), fade=not merged
             )
+            # Where the client changed a room that uses a scene made in Home
+            # Assistant, the room holds the scene and entities together.
+            together = any(
+                isinstance(body, Mapping) and "scene" in body and "entities" in body
+                for body in rooms.values()
+            )
             steps = plan_steps(
                 rooms,
                 fade_seconds=fade_seconds,
                 group_size=group_size,
                 pause_seconds=pause_seconds,
-                merged=merged,
+                rooms_off=rooms_off,
+                merged=merged or together,
             )
         except ScheduleError as err:
             if report:

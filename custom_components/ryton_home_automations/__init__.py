@@ -28,7 +28,8 @@ from .engine.preview import (
     build_preview,
     format_preview,
 )
-from .engine.day_list import build_day_list
+from .engine.changes import ChangeError, dates_between
+from .engine.day_list import build_day_list, resolve_schedule_day
 from .engine.run_through import automations_of_dates, every_automation
 from .engine.time_resolver import ScheduleError
 from .scheduler import ENGINE_ERRORS, Scheduler
@@ -41,6 +42,22 @@ SERVICE_RELOAD_SCHEDULE = "reload_schedule"
 SERVICE_RUN_THROUGH = "run_through"
 SERVICE_STOP_RUN_THROUGH = "stop_run_through"
 SERVICE_SYNC_NOW = "sync_now"
+SERVICE_ADD_CHANGE = "add_change"
+SERVICE_REMOVE_CHANGE = "remove_change"
+SERVICE_LIST_CHANGES = "list_changes"
+SERVICE_SET_ROOM_SCHEDULING = "set_room_scheduling"
+SERVICE_DAYS_IN_DATES = "days_in_dates"
+
+ADD_CHANGE_SCHEMA = vol.Schema({vol.Required("change"): dict})
+REMOVE_CHANGE_SCHEMA = vol.Schema({vol.Required("id"): cv.string})
+ROOM_SCHEDULING_SCHEMA = vol.Schema(
+    {vol.Required("room"): cv.string, vol.Required("scheduling"): vol.In(["on", "off"])}
+)
+DAYS_IN_DATES_SCHEMA = vol.Schema(
+    {vol.Required("from"): cv.date, vol.Required("until"): cv.date}
+)
+# The longest span of dates a temporary change's days are listed for.
+MAX_CHANGE_DAYS = 366
 
 PREVIEW_SCHEMA = vol.Schema(
     {
@@ -234,6 +251,71 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "revision": schedule.get("revision"),
         }
 
+    async def handle_add_change(call: ServiceCall) -> ServiceResponse:
+        """Store one of the client's temporary changes. It applies from now."""
+        try:
+            made = await scheduler.async_add_change(call.data["change"])
+        except ChangeError as err:
+            raise ServiceValidationError(f"The change was refused: {err}") from err
+        return {"change": made}
+
+    async def handle_remove_change(call: ServiceCall) -> ServiceResponse:
+        return {"removed": await scheduler.async_remove_change(call.data["id"])}
+
+    async def handle_list_changes(call: ServiceCall) -> ServiceResponse:
+        return {"rooms_off": list(scheduler.rooms_off), "changes": list(scheduler.changes)}
+
+    async def handle_set_room_scheduling(call: ServiceCall) -> ServiceResponse:
+        """Set a room's own scheduling switch. It stays until it is set again."""
+        await scheduler.async_set_room_scheduling(
+            call.data["room"], call.data["scheduling"] == "on"
+        )
+        return {"rooms_off": list(scheduler.rooms_off)}
+
+    async def handle_days_in_dates(call: ServiceCall) -> ServiceResponse:
+        """Say which of the schedule's days occur in a span of dates.
+
+        This is what the client chooses from when a change is to touch only
+        some kinds of day. The engine works it out; nothing else does.
+        """
+        schedule = scheduler.schedule
+        if schedule is None:
+            raise HomeAssistantError("There is no schedule yet")
+        first, last = call.data["from"], call.data["until"]
+        if last < first or (last - first).days >= MAX_CHANGE_DAYS:
+            raise ServiceValidationError("The dates must be in order and within a year")
+        try:
+            calendar = await async_read_calendar(
+                hass,
+                first - timedelta(days=LOOK_BACK_DAYS),
+                last + timedelta(days=LOOK_AHEAD_DAYS),
+            )
+            found: dict[str, list[str]] = {}
+            for day in dates_between(first, last):
+                day_id = resolve_schedule_day(schedule, day, calendar).day_id
+                found.setdefault(day_id, []).append(day.isoformat())
+        except ENGINE_ERRORS as err:
+            raise HomeAssistantError(str(err)) from err
+        return {
+            "days": [{"day": day_id, "dates": dates} for day_id, dates in found.items()]
+        }
+
+    for name, handler, schema, response in (
+        (SERVICE_ADD_CHANGE, handle_add_change, ADD_CHANGE_SCHEMA, SupportsResponse.OPTIONAL),
+        (SERVICE_REMOVE_CHANGE, handle_remove_change, REMOVE_CHANGE_SCHEMA, SupportsResponse.OPTIONAL),
+        (SERVICE_LIST_CHANGES, handle_list_changes, None, SupportsResponse.ONLY),
+        (
+            SERVICE_SET_ROOM_SCHEDULING,
+            handle_set_room_scheduling,
+            ROOM_SCHEDULING_SCHEMA,
+            SupportsResponse.OPTIONAL,
+        ),
+        (SERVICE_DAYS_IN_DATES, handle_days_in_dates, DAYS_IN_DATES_SCHEMA, SupportsResponse.ONLY),
+    ):
+        hass.services.async_register(
+            DOMAIN, name, handler, schema=schema, supports_response=response
+        )
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_SYNC_NOW,
@@ -285,7 +367,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     Otherwise the schedule it last ran would come back, and run, the next
     time the integration is added.
     """
-    for name in ("state", "sync"):
+    for name in ("state", "sync", "changes"):
         await Store(hass, 1, f"{DOMAIN}.{name}").async_remove()
 
 
@@ -298,4 +380,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, SERVICE_RUN_THROUGH)
     hass.services.async_remove(DOMAIN, SERVICE_STOP_RUN_THROUGH)
     hass.services.async_remove(DOMAIN, SERVICE_SYNC_NOW)
+    for name in (
+        SERVICE_ADD_CHANGE,
+        SERVICE_REMOVE_CHANGE,
+        SERVICE_LIST_CHANGES,
+        SERVICE_SET_ROOM_SCHEDULING,
+        SERVICE_DAYS_IN_DATES,
+    ):
+        hass.services.async_remove(DOMAIN, name)
     return True

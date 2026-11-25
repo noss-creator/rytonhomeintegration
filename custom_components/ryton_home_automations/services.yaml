@@ -56,3 +56,44 @@ run_through:
 stop_run_through:
 
 sync_now:
+
+add_change:
+  fields:
+    change:
+      required: true
+      selector:
+        object:
+
+remove_change:
+  fields:
+    id:
+      required: true
+      selector:
+        text:
+
+list_changes:
+
+set_room_scheduling:
+  fields:
+    room:
+      required: true
+      selector:
+        area:
+    scheduling:
+      required: true
+      selector:
+        select:
+          options:
+            - "on"
+            - "off"
+
+days_in_dates:
+  fields:
+    from:
+      required: true
+      selector:
+        date:
+    until:
+      required: true
+      selector:
+        date:

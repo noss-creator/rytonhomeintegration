@@ -201,3 +201,11 @@ def test_a_schedules_own_room_still_cannot_hold_both():
     with pytest.raises(ScheduleError):
         plan_steps(both)
     assert len(plan_steps(both, merged=True)) == 2
+
+
+def test_a_room_with_a_scene_and_entities_set_after_it_keeps_both():
+    """As where the client changed a room that uses a scene."""
+    both = {"hall": {"scene": "scene.hall", "entities": {"light.h": ON}}}
+    assert latest_state([entities(hall={"light.old": ON}), both]) == {
+        "hall": {"scene": "scene.hall", "entities": {"light.h": ON}}
+    }
