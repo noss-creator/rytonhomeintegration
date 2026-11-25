@@ -262,7 +262,9 @@ class Scheduler:
         try:
             # A room that uses one of the schedule's own scenes gets that
             # scene's entities, so each is paced, checked and retried.
-            rooms = expand_scenes(rooms, schedule_scenes(self.schedule))
+            rooms = expand_scenes(
+                rooms, schedule_scenes(self.schedule), fade=not merged
+            )
             steps = plan_steps(
                 rooms,
                 fade_seconds=fade_seconds,
@@ -293,8 +295,13 @@ class Scheduler:
             self.report(f"{name}: {len(lines)} still failing after three tries.\n{listed}")
         return lines
 
-    async def async_run_scene(self, scene_id: str, fade_seconds: float = 0) -> None:
-        """Set one of the schedule's own scenes, as when it is turned on by hand."""
+    async def async_run_scene(
+        self, scene_id: str, fade_seconds: float | None = None
+    ) -> None:
+        """Set one of the schedule's own scenes, as when it is turned on by hand.
+
+        It fades as saved with the scene, unless a fade is given.
+        """
         try:
             scene = schedule_scenes(self.schedule).get(scene_id)
         except ScheduleError:
@@ -303,9 +310,15 @@ class Scheduler:
             self.report(f"The scene {scene_id} is not in the schedule")
             return
         await self._async_carry_out(
-            {scene["room"]: {"entities": scene["entities"]}},
+            {
+                scene["room"]: {
+                    "entities": scene["entities"],
+                    "fade_seconds": scene["fade_seconds"]
+                    if fade_seconds is None
+                    else fade_seconds,
+                }
+            },
             f"The scene {scene['name']}",
-            fade_seconds=fade_seconds,
         )
 
     # --- running through automations back to back ---------------------------

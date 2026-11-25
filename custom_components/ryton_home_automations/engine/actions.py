@@ -139,6 +139,16 @@ def _entity_call(
     raise ScheduleError(f"{entity_id}: the action is not understood")
 
 
+def room_fade(room: str, body: Mapping[str, Any], otherwise: float) -> float:
+    """The fade of one room: its own if it has one, or the automation's."""
+    if "fade_seconds" not in body:
+        return otherwise
+    fade = body["fade_seconds"]
+    if isinstance(fade, bool) or not isinstance(fade, (int, float)) or fade < 0:
+        raise ScheduleError(f"{room}: the fade is not a number of seconds")
+    return fade
+
+
 def latest_state(missed: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
     """Combine automations that were missed into the state the house should be in now.
 
@@ -210,10 +220,15 @@ def plan_steps(
             scene = body["scene"]
             if not isinstance(scene, str) or not scene.startswith("scene."):
                 raise ScheduleError(f"{room}: {scene!r} is not a scene")
-            scenes.append(Call(room, scene, _SCENE, "turn_on"))
+            # A scene fades only by the room's own fade.
+            own = room_fade(room, body, 0)
+            scenes.append(
+                Call(room, scene, _SCENE, "turn_on", {"transition": own} if own else {})
+            )
         if has_entities:
+            fade = room_fade(room, body, fade_seconds)
             for entity_id, action in body["entities"].items():
-                entities.append(_entity_call(room, entity_id, action, fade_seconds))
+                entities.append(_entity_call(room, entity_id, action, fade))
 
     steps = [Step((scene,), pause_seconds) for scene in scenes]
     for start in range(0, len(entities), group_size):

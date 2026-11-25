@@ -18,7 +18,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from .actions import _entity_call
+from .actions import _entity_call, room_fade
 from .time_resolver import ScheduleError
 
 # Every one of these scenes is named this way in Home Assistant, so it can
@@ -67,18 +67,27 @@ def schedule_scenes(schedule: Mapping[str, Any] | None) -> dict[str, dict[str, A
             "name": name.strip(),
             "room": room,
             "entities": dict(entities),
+            # Raises if the fade is not a number of seconds.
+            "fade_seconds": room_fade(scene_id, scene, 0),
         }
     return scenes
 
 
 def expand_scenes(
-    rooms: Mapping[str, Any], scenes: Mapping[str, Mapping[str, Any]]
+    rooms: Mapping[str, Any],
+    scenes: Mapping[str, Mapping[str, Any]],
+    *,
+    fade: bool = True,
 ) -> dict[str, Any]:
     """Replace each room's use of a schedule scene by that scene's entities.
 
     A room that uses any other scene is left as it is. Where a room holds a
     scene and entities together, as after a restart, the entities were set
     after the scene and so they win.
+
+    The scene's fade comes with it, unless the room has its own. With
+    ``fade`` false no fade is taken from a scene, as when catching up after
+    a restart.
     """
     by_entity = {entity_id_of(scene_id): scene for scene_id, scene in scenes.items()}
     expanded: dict[str, Any] = {}
@@ -92,4 +101,8 @@ def expand_scenes(
             entities.pop(entity_id, None)
             entities[entity_id] = action
         expanded[room] = {"entities": entities}
+        if "fade_seconds" in body:
+            expanded[room]["fade_seconds"] = body["fade_seconds"]
+        elif fade and by_entity[scene].get("fade_seconds"):
+            expanded[room]["fade_seconds"] = by_entity[scene]["fade_seconds"]
     return expanded

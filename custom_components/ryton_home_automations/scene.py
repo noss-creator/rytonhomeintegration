@@ -64,9 +64,7 @@ class RytonScene(Scene):
         # Not waited for: the check and retry take a while, and whoever turned
         # the scene on should not be kept waiting for them.
         self.hass.async_create_task(
-            self._scheduler.async_run_scene(
-                self._scene_id, float(kwargs.get("transition") or 0)
-            )
+            self._scheduler.async_run_scene(self._scene_id, kwargs.get("transition"))
         )
 
 

@@ -77,6 +77,9 @@ def test_a_schedule_with_a_good_scene_is_accepted():
         scene(entities=None),
         scene(entities={"light.spots": {"state": "sideways"}}),
         scene(entities={"scene.other": ON}),
+        scene(fade_seconds=-1),
+        scene(fade_seconds="slow"),
+        scene(fade_seconds=True),
         "ryton_kitchen_supper",
     ],
 )
@@ -140,6 +143,95 @@ def test_the_rooms_given_are_not_altered():
         "light.spots": ON,
         "switch.hot_plate": OFF,
     }
+
+
+# --- fade ----------------------------------------------------------------------
+
+
+def data_sent(rooms, **options):
+    return {
+        call.entity_id: call.data
+        for step in plan_steps(rooms, **options)
+        for call in step.calls
+    }
+
+
+def test_a_room_fades_by_its_own_fade():
+    rooms = {
+        "kitchen": {"entities": {"light.spots": ON}, "fade_seconds": 20},
+        "porch": {"entities": {"light.porch": OFF}},
+    }
+    assert data_sent(rooms) == {"light.spots": {"transition": 20}, "light.porch": {}}
+
+
+def test_a_rooms_own_fade_comes_before_the_automations():
+    rooms = {
+        "kitchen": {"entities": {"light.spots": ON}, "fade_seconds": 20},
+        "porch": {"entities": {"light.porch": OFF}},
+        "hall": {"entities": {"light.hall": ON}, "fade_seconds": 0},
+    }
+    assert data_sent(rooms, fade_seconds=5) == {
+        "light.spots": {"transition": 20},
+        "light.porch": {"transition": 5},
+        "light.hall": {},
+    }
+
+
+def test_an_entitys_own_fade_comes_before_the_rooms():
+    rooms = {
+        "kitchen": {
+            "entities": {"light.spots": {"state": "on", "fade_seconds": 3}, "light.led": ON},
+            "fade_seconds": 20,
+        }
+    }
+    assert data_sent(rooms) == {"light.spots": {"transition": 3}, "light.led": {"transition": 20}}
+
+
+def test_only_lights_fade():
+    rooms = {"kitchen": {"entities": {"switch.hot_plate": ON}, "fade_seconds": 20}}
+    assert data_sent(rooms) == {"switch.hot_plate": {}}
+
+
+@pytest.mark.parametrize("bad", [-1, "slow", True, None])
+def test_a_room_fade_that_is_not_a_number_is_refused(bad):
+    with pytest.raises(ScheduleError, match="fade"):
+        plan_steps({"kitchen": {"entities": {"light.spots": ON}, "fade_seconds": bad}})
+
+
+def test_a_home_assistant_scene_fades_by_the_rooms_fade():
+    rooms = {"kitchen": {"scene": "scene.kitchen_bright", "fade_seconds": 8}}
+    assert data_sent(rooms) == {"scene.kitchen_bright": {"transition": 8}}
+    # The automation's fade alone does not reach a scene.
+    plain = {"kitchen": {"scene": "scene.kitchen_bright"}}
+    assert data_sent(plain, fade_seconds=5) == {"scene.kitchen_bright": {}}
+
+
+def test_a_scene_keeps_the_fade_it_was_saved_with():
+    scenes = schedule_scenes(with_scenes(scene(fade_seconds=12)))
+    assert scenes["ryton_kitchen_supper"]["fade_seconds"] == 12
+    expanded = expand_scenes({"kitchen": {"scene": "scene.ryton_kitchen_supper"}}, scenes)
+    assert expanded["kitchen"]["fade_seconds"] == 12
+    assert data_sent(expanded) == {"light.spots": {"transition": 12}, "switch.hot_plate": {}}
+
+
+def test_a_scene_saved_without_a_fade_has_none():
+    scenes = schedule_scenes(with_scenes(scene()))
+    assert scenes["ryton_kitchen_supper"]["fade_seconds"] == 0
+    expanded = expand_scenes({"kitchen": {"scene": "scene.ryton_kitchen_supper"}}, scenes)
+    assert "fade_seconds" not in expanded["kitchen"]
+
+
+def test_the_rooms_fade_comes_before_the_scenes():
+    scenes = schedule_scenes(with_scenes(scene(fade_seconds=12)))
+    rooms = {"kitchen": {"scene": "scene.ryton_kitchen_supper", "fade_seconds": 0}}
+    assert data_sent(expand_scenes(rooms, scenes)) == {"light.spots": {}, "switch.hot_plate": {}}
+
+
+def test_catching_up_after_a_restart_does_not_fade():
+    scenes = schedule_scenes(with_scenes(scene(fade_seconds=12)))
+    missed = latest_state([{"kitchen": {"scene": "scene.ryton_kitchen_supper"}}])
+    expanded = expand_scenes(missed, scenes, fade=False)
+    assert data_sent(expanded, merged=True) == {"light.spots": {}, "switch.hot_plate": {}}
 
 
 def test_after_a_restart_entities_set_after_the_scene_win():
