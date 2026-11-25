@@ -364,3 +364,107 @@ def test_early_shabbos_this_week_wins_over_the_rules():
 def test_bad_early_shabbos_rules_are_refused(rule):
     with pytest.raises(ScheduleError):
         shabbos_start(SUMMER_FRIDAY, [rule])
+
+
+# --- a time that goes by rules ---------------------------------------------------
+
+CLOCK_7 = {"kind": "clock", "at": "07:00"}
+CLOCK_8 = {"kind": "clock", "at": "08:00"}
+CLOCK_9 = {"kind": "clock", "at": "09:00"}
+SUMMER = {"kind": "clock_season", "season": "summer"}
+LATE_SHKIA = {"kind": "zman_range", "zman": "shkia", "from": "19:00"}
+
+
+def by_rule(*rules, otherwise=CLOCK_7):
+    return {
+        "kind": "by_rule",
+        "rules": [{"when": when, "time": time} for when, time in rules],
+        "otherwise": otherwise,
+    }
+
+
+def test_with_no_rules_the_time_is_the_usual_one():
+    assert resolve(by_rule()) == at(SUMMER_FRIDAY, "07:00")
+
+
+def test_a_rule_that_matches_gives_its_time():
+    spec = by_rule((SUMMER, CLOCK_8))
+    assert resolve(spec, SUMMER_FRIDAY) == at(SUMMER_FRIDAY, "08:00")
+    assert resolve(spec, WINTER_FRIDAY) == at(WINTER_FRIDAY, "07:00")
+
+
+def test_the_first_rule_that_matches_wins():
+    spec = by_rule((LATE_SHKIA, CLOCK_9), (SUMMER, CLOCK_8))
+    assert resolve(spec, SUMMER_FRIDAY) == at(SUMMER_FRIDAY, "09:00")
+    swapped = by_rule((SUMMER, CLOCK_8), (LATE_SHKIA, CLOCK_9))
+    assert resolve(swapped, SUMMER_FRIDAY) == at(SUMMER_FRIDAY, "08:00")
+
+
+def test_a_rule_by_dates():
+    june = {"kind": "date_range", "from": "06-01", "to": "06-30"}
+    spec = by_rule((june, CLOCK_8))
+    assert resolve(spec, TUESDAY) == at(TUESDAY, "08:00")
+    assert resolve(spec, WINTER_FRIDAY) == at(WINTER_FRIDAY, "07:00")
+
+
+def test_a_rule_by_shkia_between_two_times():
+    early = {"kind": "zman_range", "zman": "shkia", "from": "16:00", "to": "17:30"}
+    late = {"kind": "zman_range", "zman": "shkia", "from": "20:00", "to": "21:00"}
+    spec = by_rule((early, CLOCK_8), (late, CLOCK_9))
+    assert resolve(spec, WINTER_FRIDAY) == at(WINTER_FRIDAY, "08:00")
+    assert resolve(spec, SUMMER_FRIDAY) == at(SUMMER_FRIDAY, "09:00")
+
+
+def test_each_case_can_be_any_kind_of_time():
+    spec = by_rule(
+        (SUMMER, {"kind": "zman", "zman": "plag", "offset_minutes": -10}),
+        otherwise={"kind": "later_of", "of": [CLOCK_7, {"kind": "zman", "zman": "shkia"}]},
+    )
+    assert resolve(spec, SUMMER_FRIDAY) == at(SUMMER_FRIDAY, "18:47")
+    assert resolve(spec, WINTER_FRIDAY) == at(WINTER_FRIDAY, "16:53")
+
+
+def test_a_rule_can_be_timed_from_shabbos_start():
+    spec = by_rule((SUMMER, {"kind": "zman", "zman": "shabbos_start", "offset_minutes": -5}))
+    start = at(SUMMER_FRIDAY, "19:00")
+    assert resolve(spec, SUMMER_FRIDAY, shabbos_start=start) == at(SUMMER_FRIDAY, "18:55")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"kind": "by_rule", "otherwise": CLOCK_7},
+        {"kind": "by_rule", "rules": "summer", "otherwise": CLOCK_7},
+        {"kind": "by_rule", "rules": []},
+        {"kind": "by_rule", "rules": [], "otherwise": None},
+        {"kind": "by_rule", "rules": [{"when": SUMMER}], "otherwise": CLOCK_7},
+        {"kind": "by_rule", "rules": [{"time": CLOCK_8}], "otherwise": CLOCK_7},
+        {"kind": "by_rule", "rules": ["summer"], "otherwise": CLOCK_7},
+        {"kind": "by_rule", "rules": [{"when": {"kind": "sometimes"}, "time": CLOCK_8}], "otherwise": CLOCK_7},
+        {"kind": "by_rule", "rules": [{"when": SUMMER, "time": {"kind": "soon"}}], "otherwise": CLOCK_7},
+    ],
+)
+def test_a_time_by_rules_that_is_not_understood_is_refused(bad):
+    with pytest.raises(ScheduleError):
+        resolve(bad, SUMMER_FRIDAY)
+
+
+def test_a_mistake_in_a_rule_is_caught_even_on_a_date_it_does_not_match():
+    # In winter the summer rule does not apply, but its missing time is still refused.
+    spec = {"kind": "by_rule", "rules": [{"when": SUMMER}], "otherwise": CLOCK_7}
+    with pytest.raises(ScheduleError):
+        resolve(spec, WINTER_FRIDAY)
+
+
+def test_a_time_by_rules_cannot_hold_another():
+    inner = by_rule((SUMMER, CLOCK_8))
+    with pytest.raises(ScheduleError, match="another"):
+        resolve(by_rule((SUMMER, inner)), SUMMER_FRIDAY)
+    with pytest.raises(ScheduleError, match="another"):
+        resolve(by_rule(otherwise=inner), SUMMER_FRIDAY)
+
+
+def test_a_rule_by_a_zman_the_date_does_not_have_cannot_be_decided():
+    no_tzeis = {"kind": "zman_range", "zman": "tzeis", "from": "19:00"}
+    with pytest.raises(ZmanUnavailableError):
+        resolve(by_rule((no_tzeis, CLOCK_8)), WINTER_FRIDAY)

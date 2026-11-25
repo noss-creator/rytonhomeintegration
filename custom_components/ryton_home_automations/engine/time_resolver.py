@@ -14,6 +14,7 @@ from .calendar_source import ZMAN_KEYS, CalendarSource
 from .day_tables import FRI
 
 SHABBOS_START = "shabbos_start"
+BY_RULE = "by_rule"
 
 Spec = Mapping[str, Any]
 
@@ -84,6 +85,10 @@ def resolve_time(
     value for the date, from ``resolve_shabbos_start``.
     """
     kind = spec.get("kind")
+    if kind == BY_RULE:
+        return resolve_time(
+            _time_by_rule(spec, day, source, tz), day, source, tz, shabbos_start
+        )
     if kind in ("later_of", "earlier_of"):
         parts = spec.get("of")
         if not isinstance(parts, Sequence) or len(parts) < 2:
@@ -91,6 +96,33 @@ def resolve_time(
         times = [_resolve_simple(p, day, source, tz, shabbos_start) for p in parts]
         return max(times) if kind == "later_of" else min(times)
     return _resolve_simple(spec, day, source, tz, shabbos_start)
+
+
+def _time_by_rule(spec: Spec, day: date, source: CalendarSource, tz: tzinfo) -> Spec:
+    """Return the time a "by rule" time means on ``day``.
+
+    Its rules are tried in order and the first that matches gives the time.
+    When none matches, the time is ``otherwise``. Every part is checked on
+    every date, so a mistake in a rule that seldom matches is still caught.
+    """
+    rules = spec.get("rules")
+    if not isinstance(rules, Sequence) or isinstance(rules, (str, bytes)):
+        raise ScheduleError("A time that goes by rules has no list of rules")
+    times = [spec.get("otherwise")]
+    for rule in rules:
+        if not isinstance(rule, Mapping) or not isinstance(rule.get("when"), Mapping):
+            raise ScheduleError("A rule of a time is not understood")
+        times.append(rule.get("time"))
+    for time_spec in times:
+        if not isinstance(time_spec, Mapping):
+            raise ScheduleError("A time that goes by rules needs a time for every case")
+        if time_spec.get("kind") == BY_RULE:
+            raise ScheduleError("A time that goes by rules cannot hold another one")
+
+    for rule in rules:
+        if _rule_matches(rule["when"], day, source, tz):
+            return rule["time"]
+    return spec["otherwise"]
 
 
 def check_rollover(
@@ -150,7 +182,7 @@ def _rule_matches(when: Spec, day: date, source: CalendarSource, tz: tzinfo) -> 
         summer_time = bool(noon.dst())
         return summer_time if season == "summer" else not summer_time
 
-    raise ScheduleError(f"Unknown kind of early Shabbos rule: {kind!r}")
+    raise ScheduleError(f"Unknown kind of rule: {kind!r}")
 
 
 def _early_start(start: Spec, day: date, source: CalendarSource, tz: tzinfo) -> datetime:
