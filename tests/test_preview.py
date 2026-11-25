@@ -60,8 +60,19 @@ def test_a_date_that_cannot_be_worked_out_gets_an_error_and_the_rest_carry_on():
     rows = build_preview(schedule, SOURCE, TZ, date(2027, 6, 17), 3)
     assert "error" not in rows[0]
     assert "friday" in rows[1]["error"]
-    assert "day" not in rows[1]
+    # Which day the date is was still worked out.
+    assert rows[1]["day"] == "friday"
     assert rows[2]["day"] == "shabbos"
+
+
+def test_a_day_with_a_blank_time_is_still_named():
+    schedule = make_schedule()
+    del schedule["days"]["friday"]["automations"][0]["time"]
+    rows = build_preview(schedule, SOURCE, TZ, date(2027, 6, 17), 3)
+    assert rows[1]["day"] == "friday"
+    assert "error" in rows[1]
+    assert "automations" not in rows[1]
+    assert "error" not in rows[2]
 
 
 def test_text_layout():

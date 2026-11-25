@@ -71,6 +71,17 @@ def _day_entry(schedule: Mapping[str, Any], day_id: str) -> Mapping[str, Any]:
     return entry
 
 
+def resolve_schedule_day(
+    schedule: Mapping[str, Any], day: date, source: CalendarSource
+) -> Any:
+    """Return which of the schedule's days ``day`` is. No times are worked out."""
+    settings = schedule["settings"]
+    table = table_for(settings.get("yom_tov_days"), settings.get("purim"))
+    return resolve_day(
+        day, source, table, lambda day_id: bool(_day_entry(schedule, day_id).get("enabled"))
+    )
+
+
 def build_day_list(
     schedule: Mapping[str, Any],
     day: date,
@@ -91,9 +102,7 @@ def build_day_list(
     rollover = settings.get("day_rollover", "04:00")
 
     table = table_for(settings.get("yom_tov_days"), settings.get("purim"))
-    resolved = resolve_day(
-        day, source, table, lambda day_id: bool(_day_entry(schedule, day_id).get("enabled"))
-    )
+    resolved = resolve_schedule_day(schedule, day, source)
     entry = _day_entry(schedule, resolved.day_id)
 
     rules = settings.get("early_shabbos_rules", ())

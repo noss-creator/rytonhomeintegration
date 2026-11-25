@@ -12,7 +12,7 @@ from typing import Any
 
 from .calendar_snapshot import CalendarDataError
 from .calendar_source import CalendarSource
-from .day_list import build_day_list
+from .day_list import build_day_list, check_schedule, resolve_schedule_day
 from .day_resolver import UnresolvedDayError
 from .time_resolver import PastRolloverError, ScheduleError, ZmanUnavailableError
 
@@ -41,7 +41,9 @@ def build_preview(
     """Return one row for each of ``days`` dates starting at ``first``.
 
     A date the engine cannot work out gets an ``error`` in its row, so one
-    bad date does not hide the others.
+    bad date does not hide the others. Where the day itself was worked out
+    and only its times were not, as with a time left blank, the row still
+    says which day the date is.
     """
     rows: list[dict[str, Any]] = []
     for n in range(days):
@@ -53,6 +55,8 @@ def build_preview(
         try:
             hebrew = source.hebrew_date(day)
             row["hebrew_date"] = f"{hebrew.day} {hebrew.month} {hebrew.year}"
+            check_schedule(schedule)
+            row["day"] = resolve_schedule_day(schedule, day, source).day_id
             day_list = build_day_list(schedule, day, source, tz)
         except (
             CalendarDataError,
@@ -63,7 +67,6 @@ def build_preview(
         ) as err:
             row["error"] = str(err)
         else:
-            row["day"] = day_list.day.day_id
             if day_list.shabbos_start is not None:
                 row["shabbos_start"] = _clock(day_list.shabbos_start, day)
             row["automations"] = [

@@ -204,7 +204,9 @@ class Syncer:
             return
         tz = ZoneInfo(self.hass.config.time_zone)
         today = dt_util.now().astimezone(tz).date()
-        mark = f"{today.isoformat()} revision {schedule.get('revision')}"
+        # The "2" is the layout of the rows. Raising it makes every house send
+        # its preview again after an update that changed what a row holds.
+        mark = f"2 {today.isoformat()} revision {schedule.get('revision')}"
         if self._sent.get("preview") == mark:
             return
         try:
