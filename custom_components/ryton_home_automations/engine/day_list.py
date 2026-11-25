@@ -5,23 +5,29 @@ start, each automation's clock time, simcha mode, and the running-alongside
 automations. It can run for any date, which is how the year preview and the
 upcoming schedule are produced.
 
-Not handled here: the client's temporary changes and the room switches.
+The client's temporary changes and room switches are laid on top here, when
+they are passed in. A change that cannot be applied is skipped and noted; it
+never stops the schedule itself from running.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, tzinfo
+from datetime import date, datetime, timedelta, tzinfo
 from typing import Any
 
 from .alongside import alongside_for
+from .changes import ROOM, SHABBOS, SIMCHA, TIME, active_changes, rooms_off_for
 from .calendar_source import CalendarSource
 from .day_resolver import ResolvedDay, resolve_day
-from .scenes import schedule_scenes
+from .scenes import expand_scenes, schedule_scenes
 from .day_tables import CHOL_HAMOED, table_for
 from .time_resolver import (
+    PastRolloverError,
     ScheduleError,
+    ZmanUnavailableError,
+    _clock,
     check_rollover,
     resolve_shabbos_start,
     resolve_time,
@@ -51,6 +57,44 @@ class DayList:
     day: ResolvedDay
     shabbos_start: datetime | None
     automations: tuple[ScheduledAutomation, ...]
+    # The rooms that automations skip on this date: each room's own switch,
+    # with the client's timed changes to it.
+    rooms_off: frozenset[str] = frozenset()
+    # The client's changes that could not be applied on this date, each as
+    # its identifier and the reason.
+    skipped_changes: tuple[tuple[str, str], ...] = ()
+
+
+# What can go wrong applying one of the client's changes. The change is then
+# skipped and the schedule's own value kept.
+_CHANGE_FAILS = (ScheduleError, PastRolloverError, ZmanUnavailableError)
+
+
+def _with_room_change(
+    rooms: Mapping[str, Any],
+    change: Mapping[str, Any],
+    scenes: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Return ``rooms`` with one room change of the client's laid on top.
+
+    An entity given a setting is set to it, and added where the room did not
+    list it. An entity given as None is left as is. Where the room uses a
+    scene made in the form, the scene's entities are changed. Where it uses
+    a scene made in Home Assistant the scene still runs, then the entities;
+    such a scene's own entities cannot be left as is.
+    """
+    room = change["room"]
+    changed = dict(rooms)
+    body = expand_scenes({room: rooms[room]}, scenes)[room] if room in rooms else {}
+    body = dict(body) if isinstance(body, Mapping) else {}
+    entities = dict(body.get("entities") or {})
+    for entity_id, action in change["entities"].items():
+        entities.pop(entity_id, None)
+        if action is not None:
+            entities[entity_id] = action
+    body["entities"] = entities
+    changed[room] = body
+    return changed
 
 
 def check_schedule(schedule: Mapping[str, Any]) -> None:
@@ -90,12 +134,17 @@ def build_day_list(
     *,
     one_week: Mapping[str, Any] | None = None,
     simcha: bool = False,
+    changes: Iterable[Any] = (),
+    rooms_off: Collection[str] = (),
 ) -> DayList:
     """Return the fixed list for ``day``.
 
-    ``one_week`` is the client's one-week Shabbos switch for this week, and
-    ``simcha`` says whether simcha mode is on for this date. Both are stored
-    in the house.
+    ``one_week`` is a one-week Shabbos switch for this week, and ``simcha``
+    says whether simcha mode is on for this date. ``changes`` holds the
+    client's temporary changes and ``rooms_off`` the rooms whose own switch
+    is off; both are stored in the house. The changes that apply to this
+    date are laid on top of the schedule. Where two touch the same thing,
+    the one made later wins.
     """
     check_schedule(schedule)
     settings = schedule["settings"]
@@ -105,12 +154,22 @@ def build_day_list(
     resolved = resolve_schedule_day(schedule, day, source)
     entry = _day_entry(schedule, resolved.day_id)
 
+    active = active_changes(changes, day, resolved.day_id)
+    skipped: list[tuple[str, str]] = []
+    used: set[str] = set()
+    week_changes = [change for change in active if change["kind"] == SHABBOS]
+    simcha_changes = [change for change in active if change["kind"] == SIMCHA]
+    time_changes = [change for change in active if change["kind"] == TIME]
+    room_changes = [change for change in active if change["kind"] == ROOM]
+    day_start = datetime.combine(day, _clock(rollover), tz)
+
     rules = settings.get("early_shabbos_rules", ())
     if resolved.occasion in table.yom_tov:
         # There is no early Shabbos on a Friday that is itself Yom Tov:
         # neither the rules nor the client's one-week switch apply.
         rules = ()
         one_week = None
+        week_changes = []
     # Below, the rules are skipped but the client's one-week early switch
     # still applies.
     elif resolved.occasion in table.friday_before_yom_tov:
@@ -122,7 +181,54 @@ def build_day_list(
     ):
         # A regular Shabbos on Chol Hamoed, unless the house chose early.
         rules = ()
-    shabbos_start = resolve_shabbos_start(day, source, tz, rules, one_week=one_week)
+    shabbos_start = None
+    # The client's latest Shabbos change for this date, where it can be used.
+    for change in reversed(week_changes):
+        asked = (
+            {"kind": "late"}
+            if change["week"] == "late"
+            else {"kind": "early", "start": change["start"]}
+        )
+        try:
+            shabbos_start = resolve_shabbos_start(day, source, tz, rules, one_week=asked)
+        except _CHANGE_FAILS as error:
+            skipped.append((change["id"], str(error)))
+            continue
+        break
+    else:
+        shabbos_start = resolve_shabbos_start(day, source, tz, rules, one_week=one_week)
+
+    def changed_time(automation_id: str, when: datetime, allow: bool) -> datetime:
+        """The automation's time after the client's latest usable time change."""
+        for change in reversed(time_changes):
+            if change["automation"] != automation_id:
+                continue
+            used.add(change["id"])
+            try:
+                if "time" in change:
+                    asked = fix(change["time"], allow)
+                else:
+                    asked = when + timedelta(minutes=change["shift_minutes"])
+                    check_rollover(asked, day, tz, rollover, allow)
+                if asked < day_start:
+                    raise ScheduleError("The time is before this day begins")
+            except _CHANGE_FAILS as error:
+                skipped.append((change["id"], str(error) or type(error).__name__))
+                continue
+            return asked
+        return when
+
+    def changed_rooms(automation_id: str, rooms: Mapping[str, Any]) -> Mapping[str, Any]:
+        """The automation's rooms with the client's room changes laid on top."""
+        for change in room_changes:
+            if change["automation"] != automation_id:
+                continue
+            used.add(change["id"])
+            try:
+                rooms = _with_room_change(rooms, change, schedule_scenes(schedule))
+            except _CHANGE_FAILS as error:
+                skipped.append((change["id"], str(error)))
+        return rooms
 
     def fix(spec: Any, allow_past_rollover: bool) -> datetime:
         if not isinstance(spec, Mapping):
@@ -144,14 +250,26 @@ def build_day_list(
             )
         seen.add(automation_id)
         allow = day_allows or bool(automation.get("allow_past_rollover"))
-        when = fix(automation.get("time"), allow)
+        when = changed_time(automation_id, fix(automation.get("time"), allow), allow)
 
-        if simcha and automation_id == NIGHT:
+        if automation_id == NIGHT and (simcha or simcha_changes):
             night_time = (settings.get("simcha") or {}).get("night_time")
-            if night_time is None:
-                raise ScheduleError("Simcha mode is on but the schedule has no simcha time")
-            # Simcha mode only ever makes Night later.
-            when = max(when, fix(night_time, allow))
+            if simcha:
+                if night_time is None:
+                    raise ScheduleError("Simcha mode is on but the schedule has no simcha time")
+                # Simcha mode only ever makes Night later.
+                when = max(when, fix(night_time, allow))
+            else:
+                # Asked for by the client: where it cannot be done, Night
+                # keeps its time.
+                try:
+                    if night_time is None:
+                        raise ScheduleError("The schedule has no simcha time")
+                    when = max(when, fix(night_time, allow))
+                    used.update(change["id"] for change in simcha_changes)
+                except _CHANGE_FAILS as error:
+                    skipped.extend((change["id"], str(error)) for change in simcha_changes)
+                    used.update(change["id"] for change in simcha_changes)
 
         automations.append(
             ScheduledAutomation(
@@ -159,7 +277,7 @@ def build_day_list(
                 automation.get("name", automation_id),
                 when,
                 automation.get("fade_seconds", 0),
-                automation.get("rooms", {}),
+                changed_rooms(automation_id, automation.get("rooms", {})),
             )
         )
 
@@ -172,16 +290,29 @@ def build_day_list(
             spec = automation.get("time")
         else:
             spec = (automation.get("times") or {}).get(applies.time_key)
+        allow = bool(automation.get("allow_past_rollover"))
         automations.append(
             ScheduledAutomation(
                 applies.id,
                 automation.get("name", applies.id),
-                fix(spec, bool(automation.get("allow_past_rollover"))),
+                changed_time(applies.id, fix(spec, allow), allow),
                 automation.get("fade_seconds", 0),
-                automation.get("rooms", {}),
+                changed_rooms(applies.id, automation.get("rooms", {})),
                 alongside=True,
             )
         )
 
+    # A change that names an automation this date does not have is skipped.
+    for change in (*time_changes, *room_changes, *simcha_changes):
+        if change["id"] not in used:
+            skipped.append((change["id"], "This day has no such automation"))
+
     automations.sort(key=lambda a: a.time)
-    return DayList(day, resolved, shabbos_start, tuple(automations))
+    return DayList(
+        day,
+        resolved,
+        shabbos_start,
+        tuple(automations),
+        rooms_off_for(active, rooms_off),
+        tuple(skipped),
+    )
