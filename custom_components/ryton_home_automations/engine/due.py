@@ -22,7 +22,7 @@ def split_due(
     engine starts.
     """
     automations = sorted(
-        (a for day_list in day_lists for a in day_list.automations),
+        (a for day_list in day_lists for a in day_list.moments),
         key=lambda a: a.time,
     )
     upcoming = [a for a in automations if a.time > now]

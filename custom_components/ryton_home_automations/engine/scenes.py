@@ -37,6 +37,17 @@ def describe_action(action: Mapping[str, Any]) -> str:
         return str(action["option"])
     if "position" in action:
         return f"{action['position']:g}% open"
+    cycle = action.get("cycle")
+    if isinstance(cycle, Mapping):
+        end = (
+            f"for {cycle.get('for_minutes')} min"
+            if "for_minutes" in cycle
+            else f"until {cycle.get('until')}"
+        )
+        return (
+            f"Cycles on {cycle.get('on_minutes')} min, "
+            f"off {cycle.get('off_minutes')} min, {end}"
+        )
     state = action.get("state")
     if state == "on" and "brightness_pct" in action:
         return f"On, {action['brightness_pct']:g}%"
@@ -95,6 +106,8 @@ def schedule_scenes(schedule: Mapping[str, Any] | None) -> dict[str, dict[str, A
         if not isinstance(entities, Mapping) or not entities:
             raise ScheduleError(f"The scene {scene_id} sets nothing")
         for entity_id, action in entities.items():
+            if isinstance(action, Mapping) and "cycle" in action:
+                raise ScheduleError(f"The scene {scene_id} cannot hold a cycle")
             # Raises if the action does not fit the entity.
             _entity_call(room, entity_id, action, 0)
         scenes[scene_id] = {

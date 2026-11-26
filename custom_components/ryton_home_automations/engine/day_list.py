@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, tzinfo
 from typing import Any
 
+from .actions import cycle_moments, cycle_of
 from .alongside import alongside_for
 from .changes import ROOM, SHABBOS, SIMCHA, TIME, active_changes, rooms_off_for
 from .calendar_source import CalendarSource
@@ -48,6 +49,8 @@ class ScheduledAutomation:
     fade_seconds: float
     rooms: Mapping[str, Any]
     alongside: bool = False
+    # For one moment of a cycle: the automation that started the cycle.
+    part_of: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,42 @@ class DayList:
     # The client's changes that could not be applied on this date, each as
     # its identifier and the reason.
     skipped_changes: tuple[tuple[str, str], ...] = ()
+    # Every later moment of the cycles the automations start, each switching
+    # one entity on or off. They run like automations but are not shown.
+    cycle_steps: tuple[ScheduledAutomation, ...] = ()
+
+    @property
+    def moments(self) -> tuple[ScheduledAutomation, ...]:
+        """Everything that runs on this date, in time order."""
+        if not self.cycle_steps:
+            return self.automations
+        return tuple(sorted((*self.automations, *self.cycle_steps), key=lambda a: a.time))
+
+
+def _cycle_steps(automation: ScheduledAutomation) -> list[ScheduledAutomation]:
+    """The later moments of every cycle an automation starts."""
+    steps: list[ScheduledAutomation] = []
+    for room, body in automation.rooms.items():
+        entities = body.get("entities") if isinstance(body, Mapping) else None
+        if not isinstance(entities, Mapping):
+            continue
+        for entity_id, action in entities.items():
+            cycle = cycle_of(entity_id, action)
+            if cycle is None:
+                continue
+            for number, (when, state) in enumerate(cycle_moments(cycle, automation.time), 1):
+                steps.append(
+                    ScheduledAutomation(
+                        f"{automation.id}#{entity_id}#{number}",
+                        f"{automation.name} (cycle)",
+                        when,
+                        0,
+                        {room: {"entities": {entity_id: {"state": state}}}},
+                        automation.alongside,
+                        automation.id,
+                    )
+                )
+    return steps
 
 
 # What can go wrong applying one of the client's changes. The change is then
@@ -321,6 +360,7 @@ def build_day_list(
             skipped.append((change["id"], "This day has no such automation"))
 
     automations.sort(key=lambda a: a.time)
+    cycle_steps = [step for automation in automations for step in _cycle_steps(automation)]
     return DayList(
         day,
         resolved,
@@ -328,4 +368,5 @@ def build_day_list(
         tuple(automations),
         rooms_off_for(active, rooms_off),
         tuple(skipped),
+        tuple(sorted(cycle_steps, key=lambda a: a.time)),
     )

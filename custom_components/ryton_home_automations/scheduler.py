@@ -268,7 +268,7 @@ class Scheduler:
         """
         if self.last_run is not None:
             for day_list in self.day_lists:
-                for automation in day_list.automations:
+                for automation in day_list.moments:
                     if automation.time <= self.last_run:
                         self._ran.add(f"{day_list.date.isoformat()}|{automation.id}")
         await self.async_rebuild(recover=True)
@@ -366,7 +366,7 @@ class Scheduler:
                 self.report(f"The list for {day} could not be fixed: {err}")
                 continue
             self.day_lists.append(day_list)
-            for automation in day_list.automations:
+            for automation in day_list.moments:
                 self._of[id(automation)] = (
                     f"{day.isoformat()}|{automation.id}",
                     day_list.rooms_off,

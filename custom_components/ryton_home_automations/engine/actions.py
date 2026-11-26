@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, time, timedelta
 from typing import Any
 
 from .time_resolver import ScheduleError
@@ -67,12 +68,108 @@ class Step:
     pause_seconds: float
 
 
+@dataclass(frozen=True)
+class Cycle:
+    """An entity switched on and off in turn, from an automation's time to an end.
+
+    The end is either ``for_minutes`` after the start or the clock time
+    ``until``. At the end the entity is switched off.
+    """
+
+    on_minutes: int
+    off_minutes: int
+    for_minutes: int | None = None
+    until: time | None = None
+
+
+# The longest a cycle can run.
+MAX_CYCLE_MINUTES = 24 * 60
+
+_CYCLE_KEYS = (
+    {"on_minutes", "off_minutes", "for_minutes"},
+    {"on_minutes", "off_minutes", "until"},
+)
+
+
+def _whole_minutes(entity_id: str, value: Any, what: str) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 1 <= value <= MAX_CYCLE_MINUTES
+    ):
+        raise ScheduleError(
+            f"{entity_id}: a cycle's {what} is a whole number of minutes, "
+            f"1 to {MAX_CYCLE_MINUTES}"
+        )
+    return value
+
+
+def cycle_of(entity_id: str, action: Any) -> Cycle | None:
+    """Return the cycle an action asks for, or None where it asks for none."""
+    if not isinstance(action, Mapping) or "cycle" not in action:
+        return None
+    spec = action["cycle"]
+    if set(action) != {"cycle"} or not isinstance(spec, Mapping):
+        raise ScheduleError(f"{entity_id}: the cycle is not understood")
+    if entity_id.split(".", 1)[0] in (_COVER, _SCENE, *_SELECTS):
+        raise ScheduleError(f"{entity_id}: only something switched on and off can cycle")
+    if set(spec) not in _CYCLE_KEYS:
+        raise ScheduleError(
+            f"{entity_id}: a cycle has on_minutes, off_minutes and either "
+            "for_minutes or until"
+        )
+    on = _whole_minutes(entity_id, spec["on_minutes"], "time on")
+    off = _whole_minutes(entity_id, spec["off_minutes"], "time off")
+    if "for_minutes" in spec:
+        length = _whole_minutes(entity_id, spec["for_minutes"], "length")
+        return Cycle(on, off, for_minutes=length)
+    try:
+        until = time.fromisoformat(spec["until"])
+    except (TypeError, ValueError):
+        raise ScheduleError(f"{entity_id}: a cycle's end is not a clock time") from None
+    return Cycle(on, off, until=until)
+
+
+def cycle_moments(cycle: Cycle, start: datetime) -> list[tuple[datetime, str]]:
+    """Every moment after ``start`` at which a cycle switches, with "on" or "off".
+
+    The entity is switched on at ``start`` by the automation itself. The
+    last moment is the end, and is always "off". An end at a clock time that
+    is not after the start is that time on the next day.
+    """
+    if cycle.for_minutes is not None:
+        end = start + timedelta(minutes=cycle.for_minutes)
+    else:
+        end = datetime.combine(start.date(), cycle.until, start.tzinfo)
+        if end <= start:
+            end = datetime.combine(
+                start.date() + timedelta(days=1), cycle.until, start.tzinfo
+            )
+    moments: list[tuple[datetime, str]] = []
+    at = start
+    while True:
+        at += timedelta(minutes=cycle.on_minutes)
+        if at >= end:
+            break
+        moments.append((at, "off"))
+        at += timedelta(minutes=cycle.off_minutes)
+        if at >= end:
+            break
+        moments.append((at, "on"))
+    moments.append((end, "off"))
+    return moments
+
+
 def _entity_call(
     room: str, entity_id: str, action: Any, automation_fade: float
 ) -> Call:
     if not isinstance(action, Mapping):
         raise ScheduleError(f"{entity_id}: the action is not understood")
     domain = entity_id.split(".", 1)[0]
+    if cycle_of(entity_id, action) is not None:
+        # The automation starts the cycle by switching the entity on. The
+        # day's list holds every later moment of it.
+        return Call(room, entity_id, domain, "turn_on", {}, Expected(("on",)))
     keys = set(action) - {"fade_seconds"}
     fade = action.get("fade_seconds", automation_fade)
 
