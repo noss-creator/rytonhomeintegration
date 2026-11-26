@@ -37,6 +37,8 @@ def describe_action(action: Mapping[str, Any]) -> str:
         return str(action["option"])
     if "position" in action:
         return f"{action['position']:g}% open"
+    if action.get("blink"):
+        return "Blinks"
     cycle = action.get("cycle")
     if isinstance(cycle, Mapping):
         end = (
@@ -108,6 +110,8 @@ def schedule_scenes(schedule: Mapping[str, Any] | None) -> dict[str, dict[str, A
         for entity_id, action in entities.items():
             if isinstance(action, Mapping) and "cycle" in action:
                 raise ScheduleError(f"The scene {scene_id} cannot hold a cycle")
+            if isinstance(action, Mapping) and "blink" in action:
+                raise ScheduleError(f"The scene {scene_id} cannot hold a blink")
             # Raises if the action does not fit the entity.
             _entity_call(room, entity_id, action, 0)
         scenes[scene_id] = {

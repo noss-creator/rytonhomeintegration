@@ -31,7 +31,13 @@ from homeassistant.util import dt as dt_util
 
 from .calendar_reader import async_read_calendar
 from .const import DOMAIN
-from .engine.actions import Call, latest_state, plan_steps
+from .engine.actions import (
+    Call,
+    blink_entities,
+    blink_pattern,
+    latest_state,
+    plan_steps,
+)
 from .engine.calendar_settings import wanted_settings
 from .engine.calendar_snapshot import CalendarDataError
 from .engine.changes import FORMAT_VERSION as CHANGES_FORMAT_VERSION
@@ -72,6 +78,23 @@ ENGINE_ERRORS = (
     UnresolvedDayError,
     ZmanUnavailableError,
 )
+
+
+def _as_it_was(state: Any) -> dict[str, Any]:
+    """What to send a light with "turn on" so it looks as it did before a blink."""
+    if state.domain != "light":
+        return {}
+    data: dict[str, Any] = {}
+    attributes = state.attributes
+    if isinstance(attributes.get("brightness"), (int, float)):
+        data["brightness"] = attributes["brightness"]
+    if attributes.get("color_mode") == "color_temp" and attributes.get("color_temp_kelvin"):
+        data["color_temp_kelvin"] = attributes["color_temp_kelvin"]
+    elif attributes.get("color_mode") in ("hs", "xy", "rgb", "rgbw", "rgbww") and attributes.get(
+        "hs_color"
+    ):
+        data["hs_color"] = list(attributes["hs_color"])
+    return data
 
 
 class Scheduler:
@@ -431,6 +454,7 @@ class Scheduler:
         key, rooms_off = self._of.get(id(automation), ("", frozenset()))
 
         async def fire(now: datetime) -> None:
+            await self._async_blink(automation.rooms, automation.name, rooms_off)
             await self._async_carry_out(
                 automation.rooms,
                 automation.name,
@@ -527,6 +551,52 @@ class Scheduler:
             listed = "\n".join(f"- {line}" for line in lines)
             self.report(f"{name}: {len(lines)} still failing after three tries.\n{listed}")
         return lines
+
+    async def _async_blink(
+        self, rooms: Mapping[str, Any], name: str, rooms_off: Collection[str]
+    ) -> None:
+        """Blink the entities an automation sets to blink, then put each back.
+
+        Only an automation running at its own time blinks. One caught up
+        after a restart does not.
+        """
+        try:
+            entity_ids = blink_entities(rooms, rooms_off)
+        except ScheduleError as err:
+            self.report(f"{name} could not blink: {err}")
+            return
+        if not entity_ids:
+            return
+        slow = bool((self.schedule or {}).get("settings", {}).get("blink_slow"))
+        before = {entity_id: self.hass.states.get(entity_id) for entity_id in entity_ids}
+
+        async def send(entity_id: str, service: str, data: Mapping[str, Any]) -> None:
+            try:
+                await self.hass.services.async_call(
+                    entity_id.split(".", 1)[0],
+                    service,
+                    {"entity_id": entity_id, **data},
+                    blocking=True,
+                )
+            except Exception as err:  # noqa: BLE001 - one entity must not stop the rest
+                _LOGGER.warning("%s: %s could not blink: %s", name, entity_id, err)
+
+        async with self._running:
+            _LOGGER.info("Blinking for %s", name)
+            for state, wait in blink_pattern(slow):
+                await asyncio.gather(
+                    *(send(entity_id, f"turn_{state}", {}) for entity_id in entity_ids)
+                )
+                if wait:
+                    await _sleep(wait)
+            # The blink ends with everything off. Whatever was on goes back on.
+            await asyncio.gather(
+                *(
+                    send(entity_id, "turn_on", _as_it_was(was))
+                    for entity_id, was in before.items()
+                    if was is not None and was.state == "on"
+                )
+            )
 
     async def async_run_scene(
         self, scene_id: str, fade_seconds: float | None = None

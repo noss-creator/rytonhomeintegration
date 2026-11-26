@@ -34,3 +34,4 @@ jobs:
           tests/test_scenes_in_home_assistant.py
           tests/test_view_in_home_assistant.py
           tests/test_cycle_in_home_assistant.py
+          tests/test_blink_in_home_assistant.py

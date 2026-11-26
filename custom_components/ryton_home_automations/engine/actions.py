@@ -68,6 +68,59 @@ class Step:
     pause_seconds: float
 
 
+# The warning blink, in seconds: on, off, three times, then a break, and
+# the same again. Afterwards each entity goes back to how it was.
+_BLINK_ON = 0.2
+_BLINK_OFF = 0.05
+_BLINK_BREAK = 0.5
+_BLINK_TIMES = 3
+_BLINK_ROUNDS = 2
+# Added to each of them in a house whose lights cannot keep up.
+_BLINK_SLOWER_BY = 0.2
+
+
+def is_blink(entity_id: str, action: Any) -> bool:
+    """Whether an action is the warning blink. Raise where it is not understood."""
+    if not isinstance(action, Mapping) or "blink" not in action:
+        return False
+    if set(action) != {"blink"} or action["blink"] is not True:
+        raise ScheduleError(f"{entity_id}: the blink is not understood")
+    if entity_id.split(".", 1)[0] in (_COVER, _SCENE, *_SELECTS):
+        raise ScheduleError(f"{entity_id}: only something switched on and off can blink")
+    return True
+
+
+def blink_pattern(slow: bool = False) -> list[tuple[str, float]]:
+    """The blink as steps: "on" or "off", and how long to wait after it."""
+    extra = _BLINK_SLOWER_BY if slow else 0
+    steps: list[tuple[str, float]] = []
+    for _round in range(_BLINK_ROUNDS):
+        for number in range(_BLINK_TIMES):
+            steps.append(("on", _BLINK_ON + extra))
+            last = number == _BLINK_TIMES - 1
+            steps.append(("off", (_BLINK_BREAK if last else _BLINK_OFF) + extra))
+    # Nothing is waited for after the last one: the entities are put back.
+    steps[-1] = ("off", 0)
+    return steps
+
+
+def blink_entities(rooms: Mapping[str, Any], rooms_off: Collection[str] = ()) -> list[str]:
+    """The entities an automation blinks, leaving out rooms switched off."""
+    found: list[str] = []
+    for room, body in rooms.items():
+        if room in rooms_off or not isinstance(body, Mapping):
+            continue
+        entities = body.get("entities")
+        if not isinstance(entities, Mapping):
+            continue
+        found += [
+            entity_id
+            for entity_id, action in entities.items()
+            if is_blink(entity_id, action) and entity_id not in found
+        ]
+    return found
+
+
 @dataclass(frozen=True)
 class Cycle:
     """An entity switched on and off in turn, from an automation's time to an end.
@@ -273,6 +326,9 @@ def latest_state(missed: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any
             # client changed a room that uses a scene.
             now = combined.setdefault(room, {"entities": {}})
             for entity_id, action in (body.get("entities") or {}).items():
+                if is_blink(entity_id, action):
+                    # A blink leaves the entity as it was.
+                    continue
                 # Moved to the end, so entities run in the order they
                 # were last set.
                 now["entities"].pop(entity_id, None)
@@ -326,6 +382,9 @@ def plan_steps(
         if has_entities:
             fade = room_fade(room, body, fade_seconds)
             for entity_id, action in body["entities"].items():
+                if is_blink(entity_id, action):
+                    # Blinked by the scheduler, apart from these steps.
+                    continue
                 entities.append(_entity_call(room, entity_id, action, fade))
 
     steps = [Step((scene,), pause_seconds) for scene in scenes]
