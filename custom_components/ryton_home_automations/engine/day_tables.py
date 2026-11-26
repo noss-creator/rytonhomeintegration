@@ -79,6 +79,10 @@ class DayTable:
     # Occasions that are themselves Yom Tov (or Yom Kippur). There is no early
     # Shabbos on a Friday that is Yom Tov, not even by the one-week switch.
     yom_tov: frozenset[str] = frozenset()
+    # Fridays that are their own day when no occasion falls on them, in a
+    # schedule that has the day. A schedule made before such a day existed
+    # does not have it, and its date is then a regular Friday.
+    friday_variants: tuple[Occasion, ...] = ()
 
 
 def _on(month: str, *days: int, weekdays: tuple[int, ...] = ANY_WEEKDAY) -> DateRule:
@@ -96,6 +100,12 @@ _NOT_SHABBOS = (MON, TUE, WED, THU, FRI, SUN)
 SHABBOS_VARIANTS = (
     Occasion("shabbos_shuva", (_on(TISHREI, 3, 4, 5, 6, 7, 8, 9, weekdays=(SAT,)),)),
     Occasion("shabbos_hagadol", (_on(NISAN, 8, 9, 10, 11, 12, 13, 14, weekdays=(SAT,)),)),
+)
+
+# The Friday before Shabbos Hagadol. Friday 13 Nisan, before an Erev Pesach
+# that is on Shabbos, is not one: its own entry decides that date.
+FRIDAY_VARIANTS = (
+    Occasion("erev_shabbos_hagadol", (_on(NISAN, 7, 8, 9, 10, 11, 12, weekdays=(FRI,)),)),
 )
 
 # Occasions that are the same in every house.
@@ -290,5 +300,11 @@ def table_for(yom_tov_days: int, purim: str) -> DayTable:
         raise ValueError(f"purim must be 'regular' or 'shushan', not {purim!r}")
 
     return DayTable(
-        occasions, SHABBOS_VARIANTS, combinations, _UNCOMBINED, before_yom_tov, yom_tov
+        occasions,
+        SHABBOS_VARIANTS,
+        combinations,
+        _UNCOMBINED,
+        before_yom_tov,
+        yom_tov,
+        FRIDAY_VARIANTS,
     )

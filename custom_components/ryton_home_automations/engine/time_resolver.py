@@ -15,6 +15,8 @@ from .day_tables import FRI
 
 SHABBOS_START = "shabbos_start"
 BY_RULE = "by_rule"
+# A case of a time that goes by rules on which the automation does not run.
+DONT_RUN = "dont_run"
 
 Spec = Mapping[str, Any]
 
@@ -86,9 +88,10 @@ def resolve_time(
     """
     kind = spec.get("kind")
     if kind == BY_RULE:
-        return resolve_time(
-            _time_by_rule(spec, day, source, tz), day, source, tz, shabbos_start
-        )
+        chosen = _time_by_rule(spec, day, source, tz)
+        if chosen.get("kind") == DONT_RUN:
+            raise ScheduleError("The automation does not run on this date")
+        return resolve_time(chosen, day, source, tz, shabbos_start)
     if kind in ("later_of", "earlier_of"):
         parts = spec.get("of")
         if not isinstance(parts, Sequence) or len(parts) < 2:
@@ -98,11 +101,23 @@ def resolve_time(
     return _resolve_simple(spec, day, source, tz, shabbos_start)
 
 
+def runs_on(spec: Spec, day: date, source: CalendarSource, tz: tzinfo) -> bool:
+    """Whether an automation with this time runs on ``day`` at all.
+
+    Only a time that goes by rules can say no: one of its cases, or its
+    ``otherwise``, can be "don't run" in place of a time.
+    """
+    if spec.get("kind") != BY_RULE:
+        return True
+    return _time_by_rule(spec, day, source, tz).get("kind") != DONT_RUN
+
+
 def _time_by_rule(spec: Spec, day: date, source: CalendarSource, tz: tzinfo) -> Spec:
     """Return the time a "by rule" time means on ``day``.
 
     Its rules are tried in order and the first that matches gives the time.
-    When none matches, the time is ``otherwise``. Every part is checked on
+    When none matches, the time is ``otherwise``. Any of them can be
+    ``{"kind": "dont_run"}`` in place of a time. Every part is checked on
     every date, so a mistake in a rule that seldom matches is still caught.
     """
     rules = spec.get("rules")

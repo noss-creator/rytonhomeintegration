@@ -18,6 +18,7 @@ from engine.time_resolver import (
     check_rollover,
     resolve_shabbos_start,
     resolve_time,
+    runs_on,
 )
 
 TZ = ZoneInfo("America/New_York")
@@ -454,6 +455,35 @@ def test_a_mistake_in_a_rule_is_caught_even_on_a_date_it_does_not_match():
     spec = {"kind": "by_rule", "rules": [{"when": SUMMER}], "otherwise": CLOCK_7}
     with pytest.raises(ScheduleError):
         resolve(spec, WINTER_FRIDAY)
+
+
+DONT_RUN = {"kind": "dont_run"}
+
+
+def test_a_rule_can_say_dont_run():
+    spec = by_rule((SUMMER, DONT_RUN))
+    assert runs_on(spec, SUMMER_FRIDAY, SOURCE, TZ) is False
+    assert runs_on(spec, WINTER_FRIDAY, SOURCE, TZ) is True
+    assert resolve(spec, WINTER_FRIDAY) == at(WINTER_FRIDAY, "07:00")
+    with pytest.raises(ScheduleError):
+        resolve(spec, SUMMER_FRIDAY)
+
+
+def test_otherwise_can_say_dont_run():
+    spec = by_rule((SUMMER, CLOCK_8), otherwise=DONT_RUN)
+    assert runs_on(spec, SUMMER_FRIDAY, SOURCE, TZ) is True
+    assert runs_on(spec, WINTER_FRIDAY, SOURCE, TZ) is False
+
+
+def test_the_first_matching_rule_decides_whether_it_runs():
+    spec = by_rule((LATE_SHKIA, DONT_RUN), (SUMMER, CLOCK_8))
+    assert runs_on(spec, SUMMER_FRIDAY, SOURCE, TZ) is False
+
+
+def test_a_plain_time_always_runs_and_cannot_say_dont_run():
+    assert runs_on(CLOCK_7, SUMMER_FRIDAY, SOURCE, TZ) is True
+    with pytest.raises(ScheduleError):
+        resolve(DONT_RUN, SUMMER_FRIDAY)
 
 
 def test_a_time_by_rules_cannot_hold_another():

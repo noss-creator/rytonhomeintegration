@@ -63,6 +63,7 @@ def make_schedule(yom_tov_days=2, purim="regular"):
     table = table_for(yom_tov_days, purim)
     day_ids = ["weekday", "friday", "shabbos"]
     day_ids += [o.id for o in table.shabbos_variants]
+    day_ids += [o.id for o in table.friday_variants]
     day_ids += [o.id for o in table.occasions if o.standalone]
     day_ids += [c.id for c in table.combinations]
 
@@ -450,3 +451,94 @@ def test_early_shabbos_this_week_still_works_on_chol_hamoed():
     switch = {"kind": "early", "start": {"kind": "clock", "at": "16:00"}}
     got = build(_schedule_with_early_rule(False), CHOL_HAMOED_FRIDAY, one_week=switch)
     assert got.shabbos_start == at(CHOL_HAMOED_FRIDAY, "16:00")
+
+
+# --- a date range that says "don't run" ----------------------------------------
+
+
+def _summer_only(time):
+    return {
+        "kind": "by_rule",
+        "rules": [{"when": {"kind": "date_range", "from": "06-01", "to": "08-31"}, "time": time}],
+        "otherwise": {"kind": "dont_run"},
+    }
+
+
+def test_an_automation_is_left_out_on_a_date_its_range_says_dont_run():
+    schedule = make_schedule()
+    schedule["days"]["weekday"]["automations"][0]["time"] = _summer_only(
+        {"kind": "clock", "at": "07:30"}
+    )
+    assert times(build(schedule, TUESDAY))[0] == ("morning", at(TUESDAY, "07:30"))
+    winter = date(2027, 1, 12)
+    assert [a.id for a in build(schedule, winter).automations] == ["sunset", "night"]
+
+
+def test_a_time_change_does_not_bring_back_an_automation_that_does_not_run():
+    schedule = make_schedule()
+    schedule["days"]["weekday"]["automations"][0]["time"] = _summer_only(
+        {"kind": "clock", "at": "07:30"}
+    )
+    winter = date(2027, 1, 12)
+    change = {
+        "id": "c1",
+        "made_at": "2027-01-10T10:00:00+00:00",
+        "from": winter.isoformat(),
+        "until": winter.isoformat(),
+        "days": "all",
+        "kind": "time",
+        "automation": "morning",
+        "time": {"kind": "clock", "at": "09:00"},
+    }
+    got = build(schedule, winter, changes=[change])
+    assert [a.id for a in got.automations] == ["sunset", "night"]
+    assert got.skipped_changes == (("c1", "This day has no such automation"),)
+
+
+def test_simcha_leaves_alone_a_night_that_does_not_run():
+    schedule = make_schedule()
+    schedule["days"]["weekday"]["automations"][2]["time"] = _summer_only(
+        {"kind": "clock", "at": "23:00"}
+    )
+    winter = date(2027, 1, 12)
+    assert [a.id for a in build(schedule, winter, simcha=True).automations] == ["morning", "sunset"]
+
+
+def test_an_alongside_automation_can_say_dont_run():
+    schedule = make_schedule()
+    schedule["alongside"][2]["time"] = {
+        "kind": "by_rule",
+        "rules": [],
+        "otherwise": {"kind": "dont_run"},
+    }
+    for offset in range(400):
+        day = date(2027, 1, 1) + timedelta(days=offset)
+        assert "selichos" not in [a.id for a in build(schedule, day).automations]
+
+
+# --- Erev Shabbos Hagadol --------------------------------------------------------
+
+EREV_SHABBOS_HAGADOL = date(2027, 4, 16)
+
+
+def test_erev_shabbos_hagadol_runs_its_own_day():
+    got = build(make_schedule(), EREV_SHABBOS_HAGADOL)
+    assert got.day.day_id == "erev_shabbos_hagadol"
+    assert got.shabbos_start == at(EREV_SHABBOS_HAGADOL, "17:42")
+
+
+def test_a_schedule_made_before_erev_shabbos_hagadol_runs_friday_on_that_date():
+    schedule = make_schedule()
+    del schedule["days"]["erev_shabbos_hagadol"]
+    got = build(schedule, EREV_SHABBOS_HAGADOL)
+    assert got.day.day_id == "friday"
+    assert "erev_shabbos" in [a.id for a in got.automations]
+
+
+def test_early_shabbos_rules_apply_on_erev_shabbos_hagadol():
+    schedule = make_schedule()
+    schedule["settings"]["early_shabbos_rules"] = [
+        {"when": {"kind": "date_range", "from": "04-01", "to": "09-30"},
+         "start": {"kind": "clock", "at": "17:00"}}
+    ]
+    assert build(schedule, EREV_SHABBOS_HAGADOL).shabbos_start == at(EREV_SHABBOS_HAGADOL, "17:00")

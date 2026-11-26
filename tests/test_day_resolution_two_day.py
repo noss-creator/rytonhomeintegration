@@ -25,6 +25,7 @@ LAST = date(2299, 12, 31)  # 400 years
 
 STANDALONE = {
     "weekday", "friday", "shabbos", "shabbos_shuva", "shabbos_hagadol",
+    "erev_shabbos_hagadol",
     "erev_rosh_hashana", "rosh_hashana_1", "rosh_hashana_2", "erev_yom_kippur",
     "yom_kippur", "erev_succos", "succos_1", "succos_2", "chol_hamoed_succos",
     "hoshana_rabba", "shmini_atzeres", "simchas_torah",
@@ -98,7 +99,7 @@ def shushan_off():
 
 
 def test_expected_lists_have_the_plans_counts():
-    assert len(STANDALONE) == 32
+    assert len(STANDALONE) == 33
     assert len(ON_FRIDAY) == 16
     assert len(ON_SHABBOS) == 14
     assert len(COMBINATIONS_SHUSHAN) == 32  # 31, plus the Sunday after Purim
@@ -157,7 +158,7 @@ def test_plain_days_fall_on_their_weekdays(regular_on):
     for r in regular_on:
         if r.day_id == "weekday":
             assert r.date.weekday() in (6, 0, 1, 2, 3)
-        elif r.day_id == "friday":
+        elif r.day_id in ("friday", "erev_shabbos_hagadol"):
             assert r.date.weekday() == 4
         elif r.day_id in ("shabbos", "shabbos_shuva", "shabbos_hagadol"):
             assert r.date.weekday() == 5
@@ -174,13 +175,14 @@ def test_each_occasion_occurs_the_right_number_of_times_a_year(regular_on):
         counts = per_year.setdefault(year, Counter())
         if r.occasion:
             counts[r.occasion] += 1
-        if r.day_id in ("shabbos_shuva", "shabbos_hagadol"):
+        if r.day_id in ("shabbos_shuva", "shabbos_hagadol", "erev_shabbos_hagadol"):
             counts[r.day_id] += 1
 
     full_years = sorted(per_year)[1:-1]
     assert len(full_years) >= 398
     once = STANDALONE - {
         "weekday", "friday", "shabbos", "shabbos_shuva", "shabbos_hagadol",
+        "erev_shabbos_hagadol",
         "chol_hamoed_succos", "chol_hamoed_pesach", "erev_tisha_bav",
     }
     for year in full_years:
@@ -194,6 +196,8 @@ def test_each_occasion_occurs_the_right_number_of_times_a_year(regular_on):
         assert c["erev_tisha_bav"] + c["tisha_bav_deferred"] == 1, year
         # Erev Pesach on Shabbos is itself Shabbos Hagadol.
         assert c["shabbos_hagadol"] + c["day_before_erev_pesach_shabbos"] == 1, year
+        # The Friday before each Shabbos Hagadol that is not Erev Pesach.
+        assert c["erev_shabbos_hagadol"] == c["shabbos_hagadol"], year
 
 
 def test_first_adar_of_a_leap_year_has_no_purim(regular_on):
@@ -313,3 +317,44 @@ def test_unlisted_overlap_is_flagged():
     )
     with pytest.raises(UnresolvedDayError):
         resolve_day(date(2021, 2, 26), SOURCE, trimmed, ALL_ON)
+
+
+# --- Erev Shabbos Hagadol --------------------------------------------------------
+
+
+def _fridays(first_year=2000, last_year=2060):
+    day = date(first_year, 1, 7)
+    while day.weekday() != 4:
+        day += timedelta(days=1)
+    while day.year <= last_year:
+        yield day
+        day += timedelta(days=7)
+
+
+@pytest.mark.parametrize("yom_tov_days", [1, 2])
+def test_erev_shabbos_hagadol_is_the_friday_before_every_shabbos_hagadol(yom_tov_days):
+    table = table_for(yom_tov_days, "regular")
+    found = 0
+    for friday in _fridays():
+        today = resolve_day(friday, SOURCE, table, ALL_ON).day_id
+        tomorrow = resolve_day(friday + timedelta(days=1), SOURCE, table, ALL_ON).day_id
+        assert (today == "erev_shabbos_hagadol") == (tomorrow == "shabbos_hagadol"), friday
+        found += today == "erev_shabbos_hagadol"
+    # Every year has one, except a year when Erev Pesach is on Shabbos.
+    assert 50 <= found <= 61
+
+
+def test_the_friday_before_erev_pesach_on_shabbos_keeps_its_own_entry():
+    table = table_for(2, "regular")
+    friday = date(2025, 4, 11)
+    assert resolve_day(friday, SOURCE, table, ALL_ON).day_id == "friday_before_erev_pesach_shabbos"
+    assert resolve_day(friday, SOURCE, table, ALL_OFF).day_id == "friday"
+
+
+def test_a_schedule_with_no_erev_shabbos_hagadol_runs_a_regular_friday():
+    table = table_for(2, "regular")
+    friday = date(2027, 4, 16)  # 9 Nisan 5787
+    assert resolve_day(friday, SOURCE, table, ALL_ON).day_id == "erev_shabbos_hagadol"
+    without = resolve_day(friday, SOURCE, table, ALL_ON, lambda _id: False)
+    assert without.day_id == "friday"
+    assert without.regular_day == "friday"

@@ -31,6 +31,7 @@ from .time_resolver import (
     check_rollover,
     resolve_shabbos_start,
     resolve_time,
+    runs_on,
 )
 
 FORMAT_VERSION = 1
@@ -122,7 +123,11 @@ def resolve_schedule_day(
     settings = schedule["settings"]
     table = table_for(settings.get("yom_tov_days"), settings.get("purim"))
     return resolve_day(
-        day, source, table, lambda day_id: bool(_day_entry(schedule, day_id).get("enabled"))
+        day,
+        source,
+        table,
+        lambda day_id: bool(_day_entry(schedule, day_id).get("enabled")),
+        lambda day_id: isinstance(schedule["days"].get(day_id), Mapping),
     )
 
 
@@ -230,6 +235,10 @@ def build_day_list(
                 skipped.append((change["id"], str(error)))
         return rooms
 
+    def runs(spec: Any) -> bool:
+        """Whether the automation runs on this date. A date range can say no."""
+        return not isinstance(spec, Mapping) or runs_on(spec, day, source, tz)
+
     def fix(spec: Any, allow_past_rollover: bool) -> datetime:
         if not isinstance(spec, Mapping):
             raise ScheduleError(f"{resolved.day_id}: an automation has no time")
@@ -249,6 +258,8 @@ def build_day_list(
                 "missing or used twice"
             )
         seen.add(automation_id)
+        if not runs(automation.get("time")):
+            continue
         allow = day_allows or bool(automation.get("allow_past_rollover"))
         when = changed_time(automation_id, fix(automation.get("time"), allow), allow)
 
@@ -290,6 +301,8 @@ def build_day_list(
             spec = automation.get("time")
         else:
             spec = (automation.get("times") or {}).get(applies.time_key)
+        if not runs(spec):
+            continue
         allow = bool(automation.get("allow_past_rollover"))
         automations.append(
             ScheduledAutomation(

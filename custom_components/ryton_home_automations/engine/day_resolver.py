@@ -49,11 +49,13 @@ def resolve_day(
     source: CalendarSource,
     table: DayTable,
     is_enabled: Callable[[str], bool],
+    has_day: Callable[[str], bool] = lambda _day_id: True,
 ) -> ResolvedDay:
     """Resolve ``day`` to one day identifier.
 
     ``is_enabled`` says whether a combination day is switched on in the
-    house's schedule.
+    house's schedule. ``has_day`` says whether the schedule has a day at
+    all; it is asked only about the Fridays that are their own day.
     """
     hebrew = source.hebrew_date(day)
     weekday = day.weekday()
@@ -68,6 +70,10 @@ def resolve_day(
         if regular == SHABBOS:
             for variant in table.shabbos_variants:
                 if _matches(variant, hebrew, weekday):
+                    return ResolvedDay(day, variant.id, regular)
+        if regular == FRIDAY:
+            for variant in table.friday_variants:
+                if _matches(variant, hebrew, weekday) and has_day(variant.id):
                     return ResolvedDay(day, variant.id, regular)
         return ResolvedDay(day, regular, regular)
 

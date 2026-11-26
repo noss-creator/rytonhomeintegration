@@ -22,6 +22,7 @@ LAST = date(2299, 12, 31)  # 400 years
 
 STANDALONE = {
     "weekday", "friday", "shabbos", "shabbos_shuva", "shabbos_hagadol",
+    "erev_shabbos_hagadol",
     "erev_rosh_hashana", "rosh_hashana_1", "rosh_hashana_2", "erev_yom_kippur",
     "yom_kippur", "erev_succos", "succos", "chol_hamoed_succos",
     "hoshana_rabba", "simchas_torah",
@@ -82,7 +83,7 @@ def shushan_on():
 
 
 def test_expected_lists_have_the_plans_counts():
-    assert len(STANDALONE) == 27
+    assert len(STANDALONE) == 28
     assert len(ON_FRIDAY) == 13
     assert len(ON_SHABBOS) == 12
 
@@ -136,13 +137,14 @@ def test_each_occasion_occurs_the_right_number_of_times_a_year(regular_on):
         counts = per_year.setdefault(SOURCE.hebrew_date(r.date).year, Counter())
         if r.occasion:
             counts[r.occasion] += 1
-        if r.day_id in ("shabbos_shuva", "shabbos_hagadol"):
+        if r.day_id in ("shabbos_shuva", "shabbos_hagadol", "erev_shabbos_hagadol"):
             counts[r.day_id] += 1
 
     full_years = sorted(per_year)[1:-1]
     assert len(full_years) >= 398
     once = STANDALONE - {
         "weekday", "friday", "shabbos", "shabbos_shuva", "shabbos_hagadol",
+        "erev_shabbos_hagadol",
         "chol_hamoed_succos", "chol_hamoed_pesach", "erev_tisha_bav",
     }
     for year in full_years:
@@ -154,6 +156,8 @@ def test_each_occasion_occurs_the_right_number_of_times_a_year(regular_on):
         assert c["shabbos_shuva"] == 1, year
         assert c["erev_tisha_bav"] + c["tisha_bav_deferred"] == 1, year
         assert c["shabbos_hagadol"] + c["day_before_erev_pesach_shabbos"] == 1, year
+        # The Friday before each Shabbos Hagadol that is not Erev Pesach.
+        assert c["erev_shabbos_hagadol"] == c["shabbos_hagadol"], year
 
 
 # Dates checked by hand against a printed calendar.
