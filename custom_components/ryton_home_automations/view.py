@@ -316,6 +316,13 @@ async def async_view_data(hass: HomeAssistant, days: int) -> dict[str, Any]:
         # The time the schedule suggests for a simcha night, and the rooms
         # simcha mode is for. A schedule that names none has none.
         "simcha_time": _simcha_clock(settings),
+        # The rooms day party mode is for, and the time the schedule suggests.
+        "day_party_rooms": [
+            room for room in (settings.get("day_party") or {}).get("rooms") or () if isinstance(room, str)
+        ],
+        "day_party_time": (settings.get("day_party") or {}).get("at")
+        if isinstance((settings.get("day_party") or {}).get("at"), str)
+        else None,
         "simcha_rooms": [
             room for room in (settings.get("simcha") or {}).get("rooms") if isinstance(room, str)
         ]

@@ -25,7 +25,8 @@ SHABBOS = "shabbos"
 SIMCHA = "simcha"
 AWAY = "away"
 MEAL_OUT = "meal_out"
-KINDS = (TIME, ROOM, ROOM_SWITCH, SHABBOS, SIMCHA, AWAY, MEAL_OUT)
+DAY_PARTY = "day_party"
+KINDS = (TIME, ROOM, ROOM_SWITCH, SHABBOS, SIMCHA, AWAY, MEAL_OUT, DAY_PARTY)
 
 _MEALS = ("night", "day", "shalosh_seudos", "first_seuda", "seuda_hamafsekes", "seuda")
 
@@ -146,6 +147,17 @@ def check_change(change: Any) -> None:
             raise ChangeError("Away for a meal names a meal the house knows")
         if change["from"] != change["until"]:
             raise ChangeError("Away for a meal is for one date")
+    elif kind == DAY_PARTY:
+        # The day meal of one date, and the time the client entered.
+        at = change.get("at")
+        try:
+            if not isinstance(at, str) or len(at) not in (5, 8):
+                raise ValueError(at)
+            datetime.strptime(at[:5], "%H:%M")
+        except ValueError:
+            raise ChangeError("The day party time is not a clock time") from None
+        if change["from"] != change["until"]:
+            raise ChangeError("A day party is for one date")
     elif kind == SIMCHA:
         # The time the client entered. One with none uses the schedule's simcha time.
         if "at" in change:

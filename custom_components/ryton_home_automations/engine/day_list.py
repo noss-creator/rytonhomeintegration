@@ -32,6 +32,7 @@ from .away import (
 )
 from .alongside import alongside_for
 from .changes import (
+    DAY_PARTY,
     MEAL_OUT,
     ROOM,
     SHABBOS,
@@ -438,6 +439,7 @@ def _base_list(
     used: set[str] = set()
     week_changes = [change for change in active if change["kind"] == SHABBOS]
     simcha_changes = [change for change in active if change["kind"] == SIMCHA]
+    party_changes = [change for change in active if change["kind"] == DAY_PARTY]
     time_changes = [change for change in active if change["kind"] == TIME]
     room_changes = [change for change in active if change["kind"] == ROOM]
     day_start = datetime.combine(day, _clock(rollover), tz)
@@ -636,6 +638,21 @@ def _base_list(
         if change["id"] not in used:
             skipped.append((change["id"], "This day has no such automation"))
 
+    if party_changes:
+        # The latest one made gives the time.
+        asked_party = party_changes[-1]["at"]
+        party = (settings.get("day_party") or {}).get("rooms")
+        try:
+            party_at = _clock_on(day, asked_party, day_start, tz)
+            check_rollover(party_at, day, tz, rollover, day_allows)
+            if not any(a.id == AFTER_DAY_SEUDA and not a.alongside for a in automations):
+                raise ScheduleError("This day has no such automation")
+            automations = _with_party_rooms(
+                automations, party_at,
+                {room for room in party if isinstance(room, str)} if isinstance(party, list) else set(),
+            )
+        except _CHANGE_FAILS as error:
+            skipped.extend((change["id"], str(error)) for change in party_changes)
     late_rooms: set[str] = set()
     if simcha_at is not None:
         automations, late_rooms = _with_simcha_rooms(automations, simcha_at, simcha_rooms)
@@ -664,6 +681,46 @@ def _base_list(
         night_usual=night_usual,
         night_rooms=night_rooms,
     )
+
+
+AFTER_DAY_SEUDA = "after_day_seuda"
+PARTY_AFTER = "after_day_seuda#party"
+
+
+def _with_party_rooms(
+    automations: list[ScheduledAutomation], party_at: datetime, party_rooms: Collection[str]
+) -> list[ScheduledAutomation]:
+    """Move After day seuda in the day party rooms to the party time.
+
+    The house's After day seuda keeps its time and leaves those rooms as
+    they are. What it has for them runs at the party time. A room that
+    another automation sets in between is not set again at the party
+    time: that automation has already taken it further. A party time that
+    is not later than After day seuda changes nothing.
+    """
+    after = next((a for a in automations if a.id == AFTER_DAY_SEUDA and not a.alongside), None)
+    if after is None or party_at <= after.time:
+        return automations
+    held = {room: body for room, body in after.rooms.items() if room in party_rooms}
+    if not held:
+        return automations
+    rest = {room: body for room, body in after.rooms.items() if room not in held}
+    late = {
+        room: body
+        for room, body in held.items()
+        if not any(
+            room in a.rooms and after.time < a.time <= party_at for a in automations if a is not after
+        )
+    }
+    automations = [replace(a, rooms=rest) if a is after else a for a in automations]
+    if late:
+        automations.append(
+            ScheduledAutomation(
+                PARTY_AFTER, "After day seuda, party rooms", party_at, after.fade_seconds, late,
+                part_of=AFTER_DAY_SEUDA,
+            )
+        )
+    return automations
 
 
 SIMCHA_NIGHT = "night#simcha"

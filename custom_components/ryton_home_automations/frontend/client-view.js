@@ -87,6 +87,7 @@ class RytonClientView extends HTMLElement {
     this._busy = false
     this._form = this._emptyForm()
     this._quick = { early: '', simchaFrom: '', simchaUntil: '', simchaAt: '' }
+    this._party = {} // the day party time being entered, by date
     this._until = {}
     this._away = { run: 'off', rooms: null, end: 'motzei', date: '' }
     this._at = { room: '', entity: '' } // where the Rooms tab is: the house, a room, or an entity
@@ -244,6 +245,8 @@ class RytonClientView extends HTMLElement {
       what = `${this._roomName(change.room)}: scheduling ${change.scheduling}`
     } else if (change.kind === 'shabbos') {
       what = change.week === 'late' ? 'Late Shabbos (at candle lighting)' : `Early Shabbos, starting at ${(change.start || {}).at || '?'}`
+    } else if (change.kind === 'day_party') {
+      what = `Day party: After day seuda at ${String(change.at || '').slice(0, 5)} in the day party rooms`
     } else if (change.kind === 'simcha') {
       what = change.at ? `Simcha: Night at ${change.at.slice(0, 5)} in the simcha rooms` : 'Simcha: a later Night'
     }
@@ -469,7 +472,7 @@ class RytonClientView extends HTMLElement {
     return `
       <section class="card">
         <h2>In place now</h2>
-        ${this._changeList(['shabbos', 'simcha'])}
+        ${this._changeList(['shabbos', 'simcha', 'day_party'])}
       </section>
       <section class="card">
         <h2>This Shabbos, ${esc(this._date(friday))}</h2>
@@ -487,7 +490,8 @@ class RytonClientView extends HTMLElement {
           <button class="btn" data-do="simcha" ${q.simchaFrom && this._simchaAt() && this._simchaCan() && !this._busy ? '' : 'disabled'}>Turn on</button>
         </div>
         <p class="muted">The time has to be later than the house's Night and before the house's day starts over at ${esc(String(this._data.rollover || '04:00').slice(0, 5))}. On a night when it is not, Night runs as usual.</p>
-      </section>`
+      </section>
+      ${this._partyCard()}`
   }
 
   _moment(iso) {
@@ -666,6 +670,44 @@ class RytonClientView extends HTMLElement {
         </section>`,
       )
       .join('')
+  }
+
+  /** Day party mode: a day meal of the coming week, and the time its After day seuda runs in the party rooms. */
+  _partyCard() {
+    const rooms = this._data.day_party_rooms || []
+    if (rooms.length === 0) {
+      return `
+      <section class="card">
+        <h2>Day party</h2>
+        <p class="muted">This house has no day party rooms set, so it cannot be used yet.</p>
+      </section>`
+    }
+    const names = rooms.map((id) => esc(this._roomName(id))).join(', ')
+    const on = {}
+    for (const change of this._data.changes || []) {
+      if (change.kind === 'day_party') on[change.from] = String(change.at || '').slice(0, 5)
+    }
+    const rows = (this._data.meals || [])
+      .filter((m) => m.meal === 'day')
+      .map((m) => {
+        const at = this._party[m.date] || on[m.date] || this._data.day_party_time || ''
+        return `
+          <div class="item">
+            <div><strong>${esc(`${m.name}, ${this._date(m.date, true)}`)}</strong>${on[m.date] ? `<div class="state on">Day party until ${esc(on[m.date])}</div>` : ''}</div>
+            <div class="row">
+              <label class="field">Until<input type="time" data-party="${esc(m.date)}" value="${esc(at)}" aria-label="The time the day party ends"></label>
+              <button class="btn" data-do="day-party" data-id="${esc(m.date)}" ${at && at !== on[m.date] && !this._busy ? '' : 'disabled'}>${on[m.date] ? 'Change the time' : 'Turn on'}</button>
+            </div>
+          </div>`
+      })
+      .join('')
+    return `
+      <section class="card">
+        <h2>Day party</h2>
+        <p class="muted">For a day meal that runs long. In the day party rooms, <strong>${names}</strong>, what the house does after the day seuda waits until the time you enter. The rest of the house runs as usual.</p>
+        ${rows || '<p class="muted">No Shabbos or Yom Tov day meals in the coming week.</p>'}
+        <p class="muted">The time has to be later than the house's After day seuda. A room that something else in the schedule sets before that time is left as that left it.</p>
+      </section>`
   }
 
   /** The simcha time being entered: what the client typed, or the time the schedule suggests. */
@@ -955,6 +997,19 @@ class RytonClientView extends HTMLElement {
       }
       case 'end-away':
         return this._do(() => this._service('end_away', {}), 'Away mode has ended. The house is back on its schedule.')
+      case 'day-party': {
+        const at = this._party[id] || this._data.day_party_time
+        return this._do(async () => {
+          // One day party for a date: a new time takes the place of the old one.
+          for (const change of this._data.changes || []) {
+            if (change.kind === 'day_party' && change.from === id) {
+              await this._service('remove_change', { id: change.id })
+            }
+          }
+          await this._add({ kind: 'day_party', at }, id, id)
+          delete this._party[id]
+        }, 'Day party is on for that meal.')
+      }
       case 'meal-out':
         return this._do(() => this._add({ kind: 'meal_out', meal: target.dataset.to }, id, id), 'Saved for that meal.')
       case 'switch':
@@ -977,6 +1032,10 @@ class RytonClientView extends HTMLElement {
     const f = this._form
     if (el.dataset.set === 'room') {
       this._room = el.value
+      return this._render()
+    }
+    if (el.dataset.party) {
+      this._party[el.dataset.party] = el.value
       return this._render()
     }
     if (el.dataset.quick) {
