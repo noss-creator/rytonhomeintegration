@@ -45,6 +45,7 @@ from .engine.changes import AWAY
 from .engine.changes import FORMAT_VERSION as CHANGES_FORMAT_VERSION
 from .engine.changes import ChangeError, check_change, still_wanted
 from .engine.day_list import (
+    check_room_night,
     DayList,
     ScheduledAutomation,
     build_day_list,
@@ -124,6 +125,8 @@ class Scheduler:
         # apart from the schedule and never leave the house.
         self.changes: list[dict[str, Any]] = []
         self.rooms_off: list[str] = []
+        # Each room with its own Night: a child's, earlier, or an adult's, later.
+        self.room_night: dict[str, dict[str, Any]] = {}
         self._changes_store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.changes"
         )
@@ -196,6 +199,7 @@ class Scheduler:
             return []
         schedule, changes, rooms_off = self.schedule, list(self.changes), list(self.rooms_off)
         house_rooms = self._house_rooms()
+        room_night = dict(self.room_night)
 
         def build() -> list[DayList]:
             lists = []
@@ -206,6 +210,7 @@ class Scheduler:
                         build_day_list(
                             schedule, day, calendar, tz, changes=changes,
                             rooms_off=rooms_off, house_rooms=house_rooms,
+                            room_night=room_night,
                         )
                     )
                 except ENGINE_ERRORS:
@@ -233,6 +238,16 @@ class Scheduler:
             if isinstance(rooms_off, list)
             else []
         )
+        room_night = kept.get("room_night")
+        self.room_night = (
+            {
+                room: dict(how)
+                for room, how in room_night.items()
+                if isinstance(room, str) and isinstance(how, dict)
+            }
+            if isinstance(room_night, dict)
+            else {}
+        )
 
     async def _async_save(self) -> None:
         await self._store.async_save(
@@ -248,6 +263,7 @@ class Scheduler:
             {
                 "format_version": CHANGES_FORMAT_VERSION,
                 "rooms_off": self.rooms_off,
+                "room_night": self.room_night,
                 "changes": self.changes,
             }
         )
@@ -408,6 +424,16 @@ class Scheduler:
         await self._async_changes_made()
         return True
 
+    async def async_set_room_night(self, room: str, how: Mapping[str, Any] | None) -> None:
+        """Give a room its own Night, or with ``None`` take it away. It has no end date."""
+        rooms = {other: kept for other, kept in self.room_night.items() if other != room}
+        if how is not None:
+            check_room_night(how)
+            rooms[room] = dict(how)
+        self.room_night = rooms
+        await self._async_save_changes()
+        await self._async_changes_made()
+
     async def async_set_room_scheduling(self, room: str, on: bool) -> None:
         """Set a room's own scheduling switch, which has no end date."""
         rooms = [other for other in self.rooms_off if other != room]
@@ -521,6 +547,7 @@ class Scheduler:
                     changes=self.changes,
                     rooms_off=self.rooms_off,
                     house_rooms=house_rooms,
+                    room_night=self.room_night,
                 )
             except ENGINE_ERRORS as err:
                 self.report(f"The list for {day} could not be fixed: {err}")
@@ -545,6 +572,7 @@ class Scheduler:
                 changes=self.changes,
                 rooms_off=self.rooms_off,
                 house_rooms=house_rooms,
+                room_night=self.room_night,
             )
         except ENGINE_ERRORS:
             # Reported when its own day comes.

@@ -36,3 +36,4 @@ jobs:
           tests/test_cycle_in_home_assistant.py
           tests/test_blink_in_home_assistant.py
           tests/test_away_in_home_assistant.py
+          tests/test_room_night_in_home_assistant.py

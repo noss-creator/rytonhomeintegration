@@ -15,7 +15,7 @@ Nothing here talks to Home Assistant.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, tzinfo
 from typing import Any
@@ -24,6 +24,7 @@ from .calendar_source import CalendarSource
 from .changes import AWAY, ChangeError, check_change, made_at
 from .day_resolver import resolve_day
 from .day_tables import SAT, table_for
+from .describe import day_name
 from .time_resolver import ScheduleError, ZmanUnavailableError, _clock, _in_date_range
 
 OFF = "off"
@@ -33,7 +34,14 @@ _PRESET_ID = re.compile(r"^[a-z0-9_]{1,60}$")
 NIGHT_MEAL = "night"
 DAY_MEAL = "day"
 SHALOSH_SEUDOS = "shalosh_seudos"
-MEALS = (NIGHT_MEAL, DAY_MEAL, SHALOSH_SEUDOS)
+# Meals that have an automation of their own: a date has one where its day
+# has that automation.
+OWN_MEALS = {
+    "first_seuda": "First seuda",
+    "seuda_hamafsekes": "Seuda hamafsekes",
+    "seuda": "Seuda",
+}
+MEALS = (NIGHT_MEAL, DAY_MEAL, SHALOSH_SEUDOS, *OWN_MEALS)
 
 YOM_KIPPUR = "yom_kippur"
 # "Until motzei Shabbos" ends this long after havdalah.
@@ -214,6 +222,19 @@ def _occasion(schedule: Mapping[str, Any], day: date, source: CalendarSource) ->
     return resolve_day(day, source, table, lambda _day_id: True).occasion
 
 
+def _resolved(schedule: Mapping[str, Any], day: date, source: CalendarSource):
+    """The day a date resolves to."""
+    settings = schedule["settings"]
+    table = table_for(settings.get("yom_tov_days"), settings.get("purim"))
+    return resolve_day(day, source, table, lambda _day_id: True)
+
+
+def _day_words(schedule: Mapping[str, Any], day: date, source: CalendarSource) -> str:
+    """The day a date resolves to, in words, as "Purim"."""
+    resolved = _resolved(schedule, day, source)
+    return day_name(resolved.occasion or resolved.day_id)
+
+
 def _is_yom_tov(schedule: Mapping[str, Any], day: date, source: CalendarSource) -> bool:
     """Whether ``day`` is Yom Tov or Yom Kippur."""
     settings = schedule["settings"]
@@ -226,11 +247,18 @@ def is_holy(schedule: Mapping[str, Any], day: date, source: CalendarSource) -> b
     return day.weekday() == SAT or _is_yom_tov(schedule, day, source)
 
 
-def meals_on(schedule: Mapping[str, Any], day: date, source: CalendarSource) -> list[tuple[str, str]]:
+def meals_on(
+    schedule: Mapping[str, Any],
+    day: date,
+    source: CalendarSource,
+    automation_ids: Collection[str] = (),
+) -> list[tuple[str, str]]:
     """The meals that belong to the schedule's ``day``, each with its name.
 
     The night meal of a Shabbos or Yom Tov belongs to the day before, whose
-    list runs through that night. Yom Kippur has no meals.
+    list runs through that night. Yom Kippur has no meals. ``automation_ids``
+    are the automations of that date: a meal with an automation of its own,
+    as on Erev Yom Kippur and Purim, is listed where the date has it.
     """
     tomorrow = day + timedelta(days=1)
     found: list[tuple[str, str]] = []
@@ -247,7 +275,15 @@ def meals_on(schedule: Mapping[str, Any], day: date, source: CalendarSource) -> 
             found.append((DAY_MEAL, name(day, "day")))
         if day.weekday() == SAT:
             found.append((SHALOSH_SEUDOS, "Shalosh seudos"))
-    return found
+    # The seuda hamafsekes before 9 Av is not a meal to be away for.
+    fast = "tisha_bav" in _resolved(schedule, day, source).day_id
+    own = [
+        (meal, words if meal != "seuda" else f"{_day_words(schedule, day, source)} seuda")
+        for meal, words in OWN_MEALS.items()
+        if meal in automation_ids and not fast
+    ]
+    # These are eaten by day, before the night meal of the date.
+    return [*own, *found] if found[:1] and found[0][0] == NIGHT_MEAL else [*found, *own]
 
 
 def motzei_end(

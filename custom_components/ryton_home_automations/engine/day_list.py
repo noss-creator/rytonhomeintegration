@@ -109,6 +109,8 @@ class DayList:
     # The moments at which away mode starts, ends or changes, each bringing
     # the rooms to where they should then be. They run but are not shown.
     switches: tuple[ScheduledAutomation, ...] = ()
+    # When Night would run with no simcha: what a room's own Night is counted from.
+    night_usual: datetime | None = None
 
     @property
     def moments(self) -> tuple[ScheduledAutomation, ...]:
@@ -240,6 +242,7 @@ def build_day_list(
     rooms_off: Collection[str] = (),
     house_rooms: Mapping[str, Collection[str]] | None = None,
     away: bool = True,
+    room_night: Mapping[str, Any] | None = None,
 ) -> DayList:
     """Return the fixed list for ``day``, with away mode taken into account.
 
@@ -256,6 +259,7 @@ def build_day_list(
     regular = _base_list(
         schedule, day, source, tz,
         one_week=one_week, simcha=simcha, changes=changes, rooms_off=rooms_off,
+        room_night=room_night,
     )
     if not away or not has_away(schedule, changes):
         return regular
@@ -274,7 +278,8 @@ def build_day_list(
             try:
                 if preset_id is None:
                     bases[key] = _base_list(
-                        schedule, of, source, tz, changes=changes, rooms_off=rooms_off
+                        schedule, of, source, tz, changes=changes, rooms_off=rooms_off,
+                        room_night=room_night,
                     )
                 else:
                     bases[key] = _base_list(
@@ -282,6 +287,7 @@ def build_day_list(
                         one_week=one_week if of == day else None,
                         simcha=simcha and of == day,
                         changes=changes, rooms_off=rooms_off, lenient=True,
+                        room_night=room_night,
                     )
             except _LIST_FAILS:
                 bases[key] = None
@@ -401,6 +407,7 @@ def _base_list(
     changes: Iterable[Any] = (),
     rooms_off: Collection[str] = (),
     lenient: bool = False,
+    room_night: Mapping[str, Any] | None = None,
 ) -> DayList:
     """Return the fixed list of one schedule for ``day``, away mode aside.
 
@@ -522,6 +529,7 @@ def _base_list(
         return when
 
     automations: list[ScheduledAutomation] = []
+    night_usual: datetime | None = None
     seen: set[str] = set()
     day_allows = bool(entry.get("allow_past_rollover"))
 
@@ -538,6 +546,8 @@ def _base_list(
         allow = day_allows or bool(automation.get("allow_past_rollover"))
         when = changed_time(automation_id, fix(automation.get("time"), allow), allow)
 
+        if automation_id == NIGHT:
+            night_usual = when
         if automation_id == NIGHT and (simcha or simcha_changes):
             night_time = (settings.get("simcha") or {}).get("night_time")
             if simcha:
@@ -595,6 +605,8 @@ def _base_list(
         if change["id"] not in used:
             skipped.append((change["id"], "This day has no such automation"))
 
+    if night_usual is not None and room_night:
+        automations = _with_room_nights(automations, room_night, night_usual, day, day_start, tz)
     automations.sort(key=lambda a: a.time)
     cycle_steps = [step for automation in automations for step in _cycle_steps(automation)]
     return DayList(
@@ -605,4 +617,113 @@ def _base_list(
         rooms_off_for(active, rooms_off),
         tuple(skipped),
         tuple(sorted(cycle_steps, key=lambda a: a.time)),
+        night_usual=night_usual,
     )
+
+
+ROOM_NIGHT = "night#own:"
+ROOM_NIGHT_MODES = ("child", "adult")
+_ROOM_NIGHT_WORDS = "A room's own Night is so many minutes from the house's Night, or a clock time"
+
+
+def check_room_night(how: Any) -> None:
+    """Refuse a room's own Night setting the engine does not understand.
+
+    ``mode`` is "child", earlier than the house's Night, or "adult", later.
+    With no mode it is a child's.
+    """
+    if not isinstance(how, Mapping) or not set(how) <= {"mode", "minutes", "at"}:
+        raise ScheduleError(_ROOM_NIGHT_WORDS)
+    if how.get("mode", "child") not in ROOM_NIGHT_MODES:
+        raise ScheduleError("A room's own Night is a child's, earlier, or an adult's, later")
+    if ("minutes" in how) == ("at" in how):
+        raise ScheduleError(_ROOM_NIGHT_WORDS)
+    if "minutes" in how:
+        minutes = how["minutes"]
+        if isinstance(minutes, bool) or not isinstance(minutes, int) or not 1 <= minutes <= 720:
+            raise ScheduleError("A room's own Night is between 1 minute and 12 hours away")
+    else:
+        if not isinstance(how["at"], str):
+            raise ScheduleError("A room's own Night clock time is not understood")
+        try:
+            _clock(how["at"])
+        except ValueError:
+            raise ScheduleError("A room's own Night clock time is not understood") from None
+
+
+def room_night_time(
+    how: Any,
+    night_usual: datetime,
+    day: date,
+    day_start: datetime,
+    tz: tzinfo,
+    night: datetime | None = None,
+) -> datetime | None:
+    """When a room has its own Night on ``day``, or None where it has none of its own.
+
+    It is counted from the Night's usual time, or it is a clock time, the
+    same on every date. A child's is earlier: it has to fall after the
+    day's start and before the Night's usual time. An adult's is later: it
+    has to fall after the Night as it runs that date (``night``, later
+    than usual on a simcha night) and before the day starts over.
+    Otherwise the room runs with the house.
+    """
+    try:
+        check_room_night(how)
+    except ScheduleError:
+        return None
+    adult = how.get("mode") == "adult"
+    if "minutes" in how:
+        step = timedelta(minutes=how["minutes"])
+        moment = night_usual + step if adult else night_usual - step
+    else:
+        moment = datetime.combine(day, _clock(how["at"]), tz)
+        if moment < day_start:
+            moment += timedelta(days=1)  # after midnight, at the end of that night
+    if adult:
+        day_end = datetime.combine(day + timedelta(days=1), day_start.timetz().replace(tzinfo=None), tz)
+        return moment if max(night_usual, night or night_usual) < moment < day_end else None
+    return moment if day_start < moment < night_usual else None
+
+
+def _with_room_nights(
+    automations: list[ScheduledAutomation],
+    room_night: Mapping[str, Any],
+    night_usual: datetime,
+    day: date,
+    day_start: datetime,
+    tz: tzinfo,
+) -> list[ScheduledAutomation]:
+    """Give each room that has one its own Night.
+
+    The room's Night settings run at its own time, and the house's Night
+    no longer runs in that room. A child's room: from its own Night until
+    the house's, automations skip the room, so it stays as its own Night
+    left it. An adult's room: the house's Night leaves it as it is, and
+    its own Night runs later.
+    """
+    night = next((a for a in automations if a.id == NIGHT and not a.alongside), None)
+    if night is None:
+        return automations
+    for room in sorted(room_night):
+        how = room_night[room]
+        body = night.rooms.get(room)
+        moment = room_night_time(how, night_usual, day, day_start, tz, night.time)
+        if body is None or moment is None:
+            continue
+        adult = how.get("mode") == "adult"
+        automations = [
+            replace(a, rooms={r: b for r, b in a.rooms.items() if r != room})
+            if room in a.rooms and (a is night if adult else moment <= a.time <= night.time)
+            else a
+            for a in automations
+        ]
+        night = next(a for a in automations if a.id == NIGHT and not a.alongside)
+        automations.append(
+            ScheduledAutomation(
+                f"{ROOM_NIGHT}{room}",
+                "Night, adult's room" if adult else "Night, child's room",
+                moment, night.fade_seconds, {room: body}, part_of=NIGHT,
+            )
+        )
+    return automations

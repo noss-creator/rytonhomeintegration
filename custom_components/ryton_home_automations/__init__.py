@@ -51,12 +51,23 @@ SERVICE_LIST_CHANGES = "list_changes"
 SERVICE_SET_ROOM_SCHEDULING = "set_room_scheduling"
 SERVICE_DAYS_IN_DATES = "days_in_dates"
 SERVICE_START_AWAY = "start_away"
+SERVICE_SET_ROOM_NIGHT = "set_room_night"
 SERVICE_END_AWAY = "end_away"
 
 ADD_CHANGE_SCHEMA = vol.Schema({vol.Required("change"): dict})
 REMOVE_CHANGE_SCHEMA = vol.Schema({vol.Required("id"): cv.string})
 ROOM_SCHEDULING_SCHEMA = vol.Schema(
     {vol.Required("room"): cv.string, vol.Required("scheduling"): vol.In(["on", "off"])}
+)
+ROOM_NIGHT_SCHEMA = vol.Schema(
+    {
+        vol.Required("room"): cv.string,
+        # A child's Night is earlier than the house's, an adult's later.
+        vol.Optional("mode"): vol.In(("child", "adult")),
+        # Minutes from the house's Night, or a clock time. Neither turns it off.
+        vol.Exclusive("minutes", "how"): vol.All(vol.Coerce(int), vol.Range(min=1, max=720)),
+        vol.Exclusive("at", "how"): cv.string,
+    }
 )
 START_AWAY_SCHEMA = vol.Schema(
     {
@@ -287,6 +298,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         return {"rooms_off": list(scheduler.rooms_off)}
 
+    async def handle_set_room_night(call: ServiceCall) -> ServiceResponse:
+        """Give a room its own Night, or take it away. It stays until it is set again."""
+        how = {key: call.data[key] for key in ("minutes", "at") if key in call.data}
+        if how:
+            how["mode"] = call.data.get("mode", "child")
+        try:
+            await scheduler.async_set_room_night(call.data["room"], how or None)
+        except ScheduleError as err:
+            raise ServiceValidationError(f"The room's own Night was not set: {err}") from err
+        return {"room_night": dict(scheduler.room_night)}
+
     async def handle_start_away(call: ServiceCall) -> ServiceResponse:
         """Turn away mode on from now, until motzei Shabbos or Yom Tov or the end of a date."""
         until = call.data["until"]
@@ -343,6 +365,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ),
         (SERVICE_DAYS_IN_DATES, handle_days_in_dates, DAYS_IN_DATES_SCHEMA, SupportsResponse.ONLY),
         (SERVICE_START_AWAY, handle_start_away, START_AWAY_SCHEMA, SupportsResponse.OPTIONAL),
+        (SERVICE_SET_ROOM_NIGHT, handle_set_room_night, ROOM_NIGHT_SCHEMA, SupportsResponse.OPTIONAL),
         (SERVICE_END_AWAY, handle_end_away, None, SupportsResponse.OPTIONAL),
     ):
         hass.services.async_register(
@@ -422,6 +445,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         SERVICE_DAYS_IN_DATES,
         SERVICE_START_AWAY,
         SERVICE_END_AWAY,
+        SERVICE_SET_ROOM_NIGHT,
     ):
         hass.services.async_remove(DOMAIN, name)
     return True

@@ -123,7 +123,13 @@ async def _async_away_and_meals(hass: HomeAssistant, scheduler: Any, now: Any, t
             for n in range(MEAL_DAYS):
                 day = today + timedelta(days=n)
                 try:
-                    found = meals_on(schedule, day, calendar)
+                    # A meal with an automation of its own is on the dates that have it.
+                    try:
+                        listed = build_day_list(schedule, day, calendar, tz, away=False)
+                        ids = [automation.id for automation in listed.automations]
+                    except Exception:  # noqa: BLE001 - the other meals are still listed
+                        ids = []
+                    found = meals_on(schedule, day, calendar, ids)
                 except Exception:  # noqa: BLE001 - one date must not hide the others
                     continue
                 meals += [
@@ -255,6 +261,10 @@ async def async_view_data(hass: HomeAssistant, days: int) -> dict[str, Any]:
                 if day_list.shabbos_start and day_list.date.weekday() == 4
                 else None,
                 "rooms_off": sorted(day_list.rooms_off),
+                # When Night runs with no simcha: a room's own Night is counted from it.
+                "night_usual": day_list.night_usual.astimezone(tz).isoformat(timespec="minutes")
+                if day_list.night_usual
+                else None,
                 "automations": automations,
             }
         )
@@ -288,6 +298,7 @@ async def async_view_data(hass: HomeAssistant, days: int) -> dict[str, Any]:
         "days": shown,
         "rooms": rooms,
         "rooms_off": list(scheduler.rooms_off),
+        "room_night": dict(scheduler.room_night),
         "changes": [change for change in scheduler.changes if not _ended(change, now)],
         "has_simcha_time": bool((settings.get("simcha") or {}).get("night_time")),
         "rollover": settings.get("day_rollover", "04:00"),

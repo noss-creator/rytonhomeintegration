@@ -27,7 +27,7 @@ AWAY = "away"
 MEAL_OUT = "meal_out"
 KINDS = (TIME, ROOM, ROOM_SWITCH, SHABBOS, SIMCHA, AWAY, MEAL_OUT)
 
-_MEALS = ("night", "day", "shalosh_seudos")
+_MEALS = ("night", "day", "shalosh_seudos", "first_seuda", "seuda_hamafsekes", "seuda")
 
 ALL_DAYS = "all"
 
@@ -143,7 +143,7 @@ def check_change(change: Any) -> None:
                 raise ChangeError("Away mode by rooms needs its list of rooms")
     elif kind == MEAL_OUT:
         if change.get("meal") not in _MEALS:
-            raise ChangeError("Away for a meal names the night meal, the day meal or shalosh seudos")
+            raise ChangeError("Away for a meal names a meal the house knows")
         if change["from"] != change["until"]:
             raise ChangeError("Away for a meal is for one date")
     elif kind != SIMCHA:
@@ -160,6 +160,11 @@ def check_store(store: Any) -> None:
     rooms_off = store.get("rooms_off", ())
     if isinstance(rooms_off, str) or not all(isinstance(room, str) for room in rooms_off):
         raise ChangeError("The rooms switched off are not understood")
+    room_night = store.get("room_night", {})
+    if not isinstance(room_night, Mapping) or not all(
+        isinstance(room, str) and isinstance(how, Mapping) for room, how in room_night.items()
+    ):
+        raise ChangeError("The rooms with their own Night are not understood")
     seen: set[str] = set()
     for change in store.get("changes", ()):
         check_change(change)

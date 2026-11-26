@@ -70,6 +70,10 @@ const STYLE = `
   .list { display: grid; gap: 8px; }
   .back { border: 0; background: none; padding: 4px 0; font: inherit; font-weight: 600; color: var(--primary-color, #2d5be3); cursor: pointer; justify-self: start; }
   .suspended { text-decoration: line-through; opacity: 0.7; }
+  fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 10px; }
+  fieldset:disabled { opacity: 0.45; }
+  .check { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .indent { margin-left: 26px; display: grid; gap: 6px; justify-items: start; }
 `
 
 class RytonClientView extends HTMLElement {
@@ -86,6 +90,7 @@ class RytonClientView extends HTMLElement {
     this._until = {}
     this._away = { run: 'off', rooms: null, end: 'motzei', date: '' }
     this._at = { room: '', entity: '' } // where the Rooms tab is: the house, a room, or an entity
+    this._child = {} // what is being filled in for a room's own Night (child or adult), by room
     this._timer = null
     this.shadowRoot.addEventListener('click', (event) => this._click(event))
     this.shadowRoot.addEventListener('change', (event) => this._change(event))
@@ -661,6 +666,96 @@ class RytonClientView extends HTMLElement {
       .join('')
   }
 
+  /** A room's own Night as it is being filled in, starting from what the house has. */
+  _childDraft(roomId) {
+    if (!this._child[roomId]) {
+      const saved = (this._data.room_night || {})[roomId]
+      const minutes = saved && saved.minutes ? saved.minutes : 60
+      this._child[roomId] = {
+        kind: saved ? saved.mode || 'child' : '', // '', 'child' (earlier) or 'adult' (later)
+        mode: saved && saved.at ? 'clock' : 'from',
+        hours: Math.floor(minutes / 60),
+        minutes: minutes % 60,
+        at: saved && saved.at ? saved.at.slice(0, 5) : '',
+      }
+    }
+    return this._child[roomId]
+  }
+
+  /** Tonight's usual Night of the house, as HH:MM, where the house has one. */
+  _nightTonight() {
+    const days = this._data.days || []
+    const day = days.find((d) => d.date === this._data.today && d.night_usual) || days.find((d) => d.night_usual)
+    return day ? day.night_usual.slice(11, 16) : ''
+  }
+
+  _childCard(room) {
+    const d = this._childDraft(room.id)
+    const saved = (this._data.room_night || {})[room.id]
+    const adult = d.kind === 'adult'
+    const word = adult ? 'later' : 'earlier'
+    const night = this._nightTonight()
+    const rollover = String(this._data.rollover || '04:00').slice(0, 5)
+    const apart = Number(d.hours) * 60 + Number(d.minutes)
+    const mins = (clock) => {
+      const [h, m] = clock.split(':').map(Number)
+      return h * 60 + m
+    }
+    let computed = ''
+    if (night && apart > 0) {
+      const at = (((mins(night) + (adult ? apart : -apart)) % 1440) + 1440) % 1440
+      const clock = `${String(Math.floor(at / 60)).padStart(2, '0')}:${String(at % 60).padStart(2, '0')}`
+      // How long after Night the house's day starts over; an adult's Night has to be before that.
+      const room_left = (((mins(rollover) - mins(night)) % 1440) + 1440) % 1440
+      computed =
+        adult && apart >= room_left
+          ? `Tonight the house's Night is at ${night}, and this would be at ${clock}, which is not before the house's day starts over at ${rollover}. On such a night the room runs with the house.`
+          : `Tonight the house's Night is at ${night}, so this room's Night is at <strong>${clock}</strong>.`
+    } else if (night) {
+      computed = `Tonight the house's Night is at ${night}.`
+    }
+    const valid = d.mode === 'from' ? apart >= 1 && apart <= 720 : Boolean(d.at)
+    const same =
+      saved &&
+      (saved.mode || 'child') === d.kind &&
+      (d.mode === 'from' ? saved.minutes === apart : saved.at && saved.at.slice(0, 5) === d.at)
+    const off = this._busy ? 'disabled' : ''
+    return `
+      <section class="card">
+        <h2>This room's own Night</h2>
+        <label class="check"><input type="checkbox" data-child="kind" data-id="${esc(room.id)}" value="child" ${d.kind === 'child' ? 'checked' : ''} ${off}> Child night mode: this room has its Night earlier than the house</label>
+        <label class="check"><input type="checkbox" data-child="kind" data-id="${esc(room.id)}" value="adult" ${adult ? 'checked' : ''} ${off}> Adult night mode: this room has its Night later than the house</label>
+        <fieldset ${d.kind ? '' : 'disabled'}>
+          <label class="check"><input type="radio" name="child-mode" data-child="mode" data-id="${esc(room.id)}" value="from" ${d.mode === 'from' ? 'checked' : ''}> ${adult ? 'Later' : 'Earlier'} than the house's Night</label>
+          <div class="indent">
+            <div class="row">
+              <input type="number" min="0" max="12" data-child="hours" data-id="${esc(room.id)}" value="${esc(d.hours)}" aria-label="Hours ${word}" ${d.mode === 'from' ? '' : 'disabled'}> hours
+              <input type="number" min="0" max="59" data-child="minutes" data-id="${esc(room.id)}" value="${esc(d.minutes)}" aria-label="Minutes ${word}" ${d.mode === 'from' ? '' : 'disabled'}> minutes ${word}
+            </div>
+            <p class="muted">${computed} It moves with the house's Night, so it can differ on Shabbos and Yom Tov.</p>
+          </div>
+          <label class="check"><input type="radio" name="child-mode" data-child="mode" data-id="${esc(room.id)}" value="clock" ${d.mode === 'clock' ? 'checked' : ''}> At a clock time</label>
+          <div class="indent">
+            <input type="time" data-child="at" data-id="${esc(room.id)}" value="${esc(d.at)}" aria-label="Clock time of this room's Night" ${d.mode === 'clock' ? '' : 'disabled'}>
+            <p class="muted">A clock time does not change from night to night. It is the same on Shabbos and Yom Tov, whatever time the house's Night is then. ${
+              adult
+                ? `It must be later than the house's Night and before the house's day starts over at ${rollover}; on a night when it is not, the room runs with the house.`
+                : "It must be earlier than the house's Night; on a night when it is not, the room runs with the house."
+            }</p>
+          </div>
+          <div class="row">
+            <button class="btn" data-do="child-save" data-id="${esc(room.id)}" ${d.kind && valid && !same && !this._busy ? '' : 'disabled'}>${saved ? 'Save the change' : 'Turn on'}</button>
+            ${saved && same ? '<span class="state on">On</span>' : ''}
+          </div>
+        </fieldset>
+        <p class="muted">${
+          adult
+            ? "The house's Night leaves this room as it is, and the room's Night runs at its own, later time."
+            : "From this room's own Night until the house's Night, automations skip this room, so it stays as its Night left it."
+        }</p>
+      </section>`
+  }
+
   /** One room: its scheduling switch, and everything in it. */
   _roomPage(room) {
     const off = (this._data.rooms_off || []).includes(room.id)
@@ -698,6 +793,7 @@ class RytonClientView extends HTMLElement {
           <button class="btn ghost" data-do="until" data-id="${esc(room.id)}" data-to="${off ? 'on' : 'off'}" ${until && !this._busy ? '' : 'disabled'}>${off ? 'On' : 'Off'} until then</button>
         </div>
       </section>
+      ${this._childCard(room)}
       <section class="card">
         <h2>In this room</h2>
         <p class="muted">Tap one to see when it is changed in the coming week.</p>
@@ -771,6 +867,15 @@ class RytonClientView extends HTMLElement {
         this._tab = id
         this._message = null
         return this._render()
+      case 'child-save': {
+        const d = this._childDraft(id)
+        const how = d.mode === 'from' ? { minutes: Number(d.hours) * 60 + Number(d.minutes) } : { at: d.at }
+        const name = d.kind === 'adult' ? 'Adult' : 'Child'
+        return this._do(async () => {
+          await this._service('set_room_night', { room: id, mode: d.kind, ...how })
+          delete this._child[id]
+        }, `${name} night mode is on for this room.`)
+      }
       case 'open-room':
         this._at = { room: id, entity: '' }
         this._message = null
@@ -849,6 +954,25 @@ class RytonClientView extends HTMLElement {
     }
     if (el.dataset.until) {
       this._until[el.dataset.until] = el.value
+      return this._render()
+    }
+    if (el.dataset.child) {
+      const room = el.dataset.id
+      const d = this._childDraft(room)
+      const key = el.dataset.child
+      if (key === 'kind') {
+        // One at a time: ticking one unticks the other.
+        d.kind = el.checked ? el.value : ''
+        // Unticking takes it away at once, where the house has it.
+        if (!el.checked && (this._data.room_night || {})[room]) {
+          return this._do(async () => {
+            await this._service('set_room_night', { room })
+            delete this._child[room]
+          }, "This room has the house's Night again.")
+        }
+      } else if (key === 'hours') d.hours = Math.min(12, Math.max(0, Math.round(Number(el.value) || 0)))
+      else if (key === 'minutes') d.minutes = Math.min(59, Math.max(0, Math.round(Number(el.value) || 0)))
+      else d[key] = el.value
       return this._render()
     }
     if (el.dataset.away) {

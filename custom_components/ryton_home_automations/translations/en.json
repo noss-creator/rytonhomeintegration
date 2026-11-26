@@ -172,6 +172,28 @@
     "end_away": {
       "name": "End away mode",
       "description": "Ends the client's away mode now. Each room goes to where the schedule has it."
+    },
+    "set_room_night": {
+      "name": "Set a room's own Night",
+      "description": "Gives a room its own Night: a child's, earlier than the house's, or an adult's, later. With neither minutes nor a time, the room goes back to the house's Night.",
+      "fields": {
+        "room": {
+          "name": "Room",
+          "description": "The room."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Child, earlier than the house's Night, or adult, later. Child where it is left out."
+        },
+        "minutes": {
+          "name": "Minutes",
+          "description": "How many minutes before, or after, the house's Night."
+        },
+        "at": {
+          "name": "Clock time",
+          "description": "Or a clock time, the same every night."
+        }
+      }
     }
   }
 }
