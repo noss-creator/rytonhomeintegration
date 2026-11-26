@@ -70,3 +70,39 @@ def test_an_automation_with_no_name_of_its_own_is_named_from_its_identifier():
     assert automation_title("after_day_seuda", None) == "After day seuda"
     assert automation_title("after_day_seuda", "after_day_seuda") == "After day seuda"
     assert automation_title("x1", "Guests leave") == "Guests leave"
+
+
+# --- entity by entity ------------------------------------------------------------
+
+
+def test_each_entity_an_automation_sets_is_listed_with_its_room():
+    from engine.describe import describe_by_entity
+
+    rooms = {
+        "den": {"scene": "scene.ryton_den_bright"},
+        "hall": {"entities": {"cover.hall": {"position": 25}, "switch.fan": {"state": "off"}}},
+    }
+    assert describe_by_entity(rooms, SCENES, {}) == [
+        {"room": "den", "entity": "light.den_a", "text": "on, 80%", "fixed": False},
+        {"room": "hall", "entity": "cover.hall", "text": "25% open", "fixed": False},
+        {"room": "hall", "entity": "switch.fan", "text": "off", "fixed": False},
+    ]
+
+
+def test_what_a_home_assistant_scene_sets_cannot_be_left_as_is():
+    from engine.describe import describe_by_entity
+
+    rooms = {"hall": {"scene": "scene.evening", "entities": {"switch.fan": {"state": "on"}}}}
+    sets = {"scene.evening": {"light.hall": "On, 40%", "switch.fan": "Off"}}
+    assert describe_by_entity(rooms, SCENES, sets) == [
+        {"room": "hall", "entity": "light.hall", "text": "on, 40%", "fixed": True},
+        # Set after the scene, so this is what the fan ends at.
+        {"room": "hall", "entity": "switch.fan", "text": "on", "fixed": False},
+    ]
+
+
+def test_a_room_whose_scheduling_is_off_sets_nothing():
+    from engine.describe import describe_by_entity
+
+    rooms = {"hall": {"entities": {"switch.fan": {"state": "off"}}}}
+    assert describe_by_entity(rooms, SCENES, {}, rooms_off=["hall"]) == []

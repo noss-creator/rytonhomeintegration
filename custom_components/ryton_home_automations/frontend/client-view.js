@@ -62,6 +62,14 @@ const STYLE = `
   .state.off { color: var(--error-color, #b3261e); }
   .state.on { color: var(--success-color, #0f7a48); }
   a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .tile { display: grid; gap: 4px; text-align: left; font: inherit; color: inherit; padding: 12px; min-height: 76px; border: 1px solid var(--divider-color, #d3d8df); border-radius: 12px; background: var(--secondary-background-color, #f3f4f6); cursor: pointer; }
+  .tile:hover, .line:hover { border-color: var(--primary-color, #2d5be3); }
+  .tile strong { font-size: 1rem; }
+  .line { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; text-align: left; font: inherit; color: inherit; padding: 12px; border: 1px solid var(--divider-color, #d3d8df); border-radius: 10px; background: var(--card-background-color, #fff); cursor: pointer; }
+  .list { display: grid; gap: 8px; }
+  .back { border: 0; background: none; padding: 4px 0; font: inherit; font-weight: 600; color: var(--primary-color, #2d5be3); cursor: pointer; justify-self: start; }
+  .suspended { text-decoration: line-through; opacity: 0.7; }
 `
 
 class RytonClientView extends HTMLElement {
@@ -77,6 +85,7 @@ class RytonClientView extends HTMLElement {
     this._quick = { early: '', simchaFrom: '', simchaUntil: '' }
     this._until = {}
     this._away = { run: 'off', rooms: null, end: 'motzei', date: '' }
+    this._at = { room: '', entity: '' } // where the Rooms tab is: the house, a room, or an entity
     this._timer = null
     this.shadowRoot.addEventListener('click', (event) => this._click(event))
     this.shadowRoot.addEventListener('change', (event) => this._change(event))
@@ -84,7 +93,6 @@ class RytonClientView extends HTMLElement {
 
   _emptyForm() {
     return {
-      what: 'time',
       from: '',
       until: '',
       days: null, // the days found in the dates, each with whether it is ticked
@@ -93,8 +101,6 @@ class RytonClientView extends HTMLElement {
       clock: '',
       minutes: 30,
       direction: 'later',
-      room: '',
-      entities: {},
     }
   }
 
@@ -228,7 +234,7 @@ class RytonClientView extends HTMLElement {
       const set = Object.entries(change.entities || {})
         .map(([id, action]) => `${this._entityName(id)} ${this._action(action)}`)
         .join(', ')
-      what = `${this._automationName(change.automation)}, ${this._roomName(change.room)}: ${set}`
+      what = `${this._automationName(change.automation)}: ${set}`
     } else if (change.kind === 'room_switch') {
       what = `${this._roomName(change.room)}: scheduling ${change.scheduling}`
     } else if (change.kind === 'shabbos') {
@@ -247,7 +253,7 @@ class RytonClientView extends HTMLElement {
   _render() {
     const tabs = [
       ['upcoming', 'Upcoming'],
-      ['changes', 'Temporary changes'],
+      ['changes', 'Time changes'],
       ['quick', 'Quick switches'],
       ['away', 'Away'],
       ['rooms', 'Rooms'],
@@ -289,25 +295,34 @@ class RytonClientView extends HTMLElement {
         </label>
         <p class="muted">Tap a room's name below to see only that room. Temporary changes are already included.</p>
       </div>`
-    const days = (this._data.days || [])
+    const days = this._dayCards(this._room)
+    const away = this._data.away
+      ? `<div class="card"><p><strong>Away mode is on: ${esc(this._data.away.name)}.</strong> What is listed below is what runs while it is on.</p></div>`
+      : ''
+    return away + filter + (days.trim() ? days : '<div class="card"><p>Nothing is coming up in the next week.</p></div>')
+  }
+
+  /** The coming days, each with its automations: all of them, or only what one room does. */
+  _dayCards(only, links = true) {
+    return (this._data.days || [])
       .map((day) => {
         const automations = day.automations
           .map((a) => {
-            const lines = a.rooms.filter((r) => !this._room || r.room === this._room)
-            if (this._room && lines.length === 0) return ''
+            const lines = a.rooms.filter((r) => !only || r.room === only)
+            if (only && lines.length === 0) return ''
             return `
               <div class="auto${a.past ? ' past' : ''}">
                 <span class="time">${esc(a.time.slice(11, 16))}</span>
                 <span class="auto-name">${esc(a.name)}</span>
                 <div class="lines">
                   ${lines.length === 0 ? '<span class="muted">Changes nothing</span>' : ''}
-                  ${lines.map((r) => `<span><button class="room-link" data-do="room" data-id="${esc(r.room)}">${esc(r.name)}</button>: ${esc(r.text)}</span>`).join('')}
+                  ${lines.map((r) => (links ? `<span><button class="room-link" data-do="room" data-id="${esc(r.room)}">${esc(r.name)}</button>: ${esc(r.text)}</span>` : `<span>${esc(r.text)}</span>`)).join('')}
                 </div>
               </div>`
           })
           .join('')
         if (!automations.trim()) return ''
-        const off = day.rooms_off.length
+        const off = day.rooms_off.length && !only
           ? `<p class="muted">Scheduling is off for: ${esc(day.rooms_off.map((r) => this._roomName(r)).join(', '))}</p>`
           : ''
         return `
@@ -322,10 +337,6 @@ class RytonClientView extends HTMLElement {
           </section>`
       })
       .join('')
-    const away = this._data.away
-      ? `<div class="card"><p><strong>Away mode is on: ${esc(this._data.away.name)}.</strong> What is listed below is what runs while it is on.</p></div>`
-      : ''
-    return away + filter + (days.trim() ? days : '<div class="card"><p>Nothing is coming up in the next week.</p></div>')
   }
 
   _changeList(kinds) {
@@ -367,7 +378,7 @@ class RytonClientView extends HTMLElement {
       </label>`
 
     let detail = ''
-    if (f.days && f.what === 'time') {
+    if (f.days) {
       detail = `
         ${automationSelect}
         <label class="field">Its time
@@ -390,19 +401,6 @@ class RytonClientView extends HTMLElement {
                  <span>than usual</span>
                </div>`
         }`
-    } else if (f.days && f.what === 'room') {
-      const room = (this._data.rooms || []).find((r) => r.id === f.room)
-      const entities = room ? room.entities.filter((e) => !e.entity_id.startsWith('scene.')) : []
-      detail = `
-        ${automationSelect}
-        <label class="field">Which room
-          <select data-form="room">
-            <option value="">Choose…</option>
-            ${(this._data.rooms || []).map((r) => `<option value="${esc(r.id)}" ${f.room === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}
-          </select>
-        </label>
-        ${room && entities.length === 0 ? '<p class="muted">This room has nothing to set.</p>' : ''}
-        <div>${entities.map((e) => this._entityRow(e)).join('')}</div>`
     }
 
     return `
@@ -411,14 +409,9 @@ class RytonClientView extends HTMLElement {
         ${this._changeList(['time', 'room'])}
       </section>
       <section class="card">
-        <h2>Make a temporary change</h2>
-        <p class="muted">It lasts for the dates you choose, then the house goes back to its schedule by itself.</p>
-        <label class="field">What to change
-          <select data-form="what">
-            <option value="time" ${f.what === 'time' ? 'selected' : ''}>The time of an automation</option>
-            <option value="room" ${f.what === 'room' ? 'selected' : ''}>What an automation does in a room</option>
-          </select>
-        </label>
+        <h2>Change a time</h2>
+        <p class="muted">Change the time of an automation for the dates you choose. Then the house goes back to its schedule by itself.</p>
+        <p class="muted">To stop one light or switch from being changed, open it under Rooms.</p>
         <div class="row">
           <label class="field">From<input type="date" data-form="from" min="${esc(today)}" value="${esc(f.from)}"></label>
           <label class="field">Until<input type="date" data-form="until" min="${esc(f.from || today)}" value="${esc(f.until)}"></label>
@@ -432,43 +425,10 @@ class RytonClientView extends HTMLElement {
       </section>`
   }
 
-  _entityRow(entity) {
-    const id = entity.entity_id
-    const domain = id.split('.')[0]
-    const chosen = this._form.entities[id]
-    const value = chosen === undefined ? '' : chosen === null ? 'leave' : chosen.option !== undefined ? `option:${chosen.option}` : chosen.position !== undefined ? 'position' : chosen.state
-    let options = [['', 'No change'], ['leave', 'Leave as is']]
-    if (domain === 'select' || domain === 'input_select') {
-      options = options.concat((entity.options || []).map((o) => [`option:${o}`, o]))
-    } else if (domain === 'cover') {
-      options = options.concat([['open', 'Open'], ['closed', 'Closed']])
-      if (entity.position) options.push(['position', 'Partly open'])
-    } else {
-      options = options.concat([['on', 'On'], ['off', 'Off']])
-    }
-    let extra = ''
-    if (chosen && chosen.state === 'on' && entity.dimmable) {
-      extra = `<span class="row"><input type="number" min="1" max="100" data-entity-brightness="${esc(id)}" value="${esc(chosen.brightness_pct ?? 100)}" aria-label="Brightness"> %</span>`
-    } else if (chosen && chosen.position !== undefined) {
-      extra = `<span class="row"><input type="number" min="0" max="100" data-entity-position="${esc(id)}" value="${esc(chosen.position)}" aria-label="How far open"> % open</span>`
-    }
-    return `
-      <div class="entity">
-        <span>${esc(entity.name)}</span>
-        <span class="row">
-          <select data-entity="${esc(id)}" aria-label="${esc(entity.name)}">
-            ${options.map(([v, label]) => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
-          </select>
-          ${extra}
-        </span>
-      </div>`
-  }
-
   _canSave() {
     const f = this._form
     if (!f.days || !f.from || !f.until || !f.days.some((d) => d.on) || !f.automation) return false
-    if (f.what === 'time') return f.mode === 'clock' ? Boolean(f.clock) : Number(f.minutes) > 0
-    return Boolean(f.room) && Object.keys(f.entities).length > 0
+    return f.mode === 'clock' ? Boolean(f.clock) : Number(f.minutes) > 0
   }
 
   _quickTab() {
@@ -598,33 +558,184 @@ class RytonClientView extends HTMLElement {
     return addDays(today, (5 - weekdayOf(today) + 7) % 7)
   }
 
+  /** How an entity is now, in a word or two. */
+  _stateNow(id) {
+    const state = this._hass && this._hass.states && this._hass.states[id]
+    if (!state) return ''
+    if (state.state === 'on' && state.attributes && state.attributes.brightness) {
+      return `On, ${Math.round((state.attributes.brightness / 255) * 100)}%`
+    }
+    return String(state.state).replace(/^./, (c) => c.toUpperCase())
+  }
+
+  /**
+   * Every time in the coming week that an automation sets this entity, with
+   * the ones the client has suspended.
+   */
+  _entityTimes(id) {
+    const found = []
+    for (const day of this._data.days || []) {
+      for (const a of day.automations) {
+        const base = { date: day.date, automation: a.id, name: a.name, time: a.time, past: a.past }
+        for (const set of a.sets || []) {
+          if (set.entity === id) found.push({ ...base, room: set.room, text: set.text, fixed: set.fixed })
+        }
+        // A suspended entity is no longer in what the automation sets.
+        for (const c of this._data.changes || []) {
+          const mine =
+            c.kind === 'room' &&
+            c.automation === a.id &&
+            c.from <= day.date &&
+            day.date <= c.until &&
+            (c.days === 'all' || c.days.includes(day.day)) &&
+            c.entities &&
+            c.entities[id] === null
+          if (mine && !found.some((row) => row.date === day.date && row.automation === a.id && !row.suspended)) {
+            // Only a change made here, for this one entity and date, is undone here.
+            const own = Object.keys(c.entities).length === 1 && c.from === c.until
+            found.push({ ...base, room: c.room, suspended: true, change: own ? c.id : null })
+          }
+        }
+      }
+    }
+    return found
+  }
+
   _rooms() {
-    const timed = (this._data.changes || []).filter((c) => c.kind === 'room_switch')
-    const rows = (this._data.rooms || [])
-      .map((room) => {
-        const off = (this._data.rooms_off || []).includes(room.id)
-        const until = this._until[room.id] || ''
-        const mine = timed.filter((c) => c.room === room.id)
+    const rooms = this._data.rooms || []
+    const room = rooms.find((r) => r.id === this._at.room)
+    if (!room) return this._house(rooms)
+    const entity = room.entities.find((e) => e.entity_id === this._at.entity)
+    return entity ? this._entityPage(room, entity) : this._roomPage(room)
+  }
+
+  /** The house: its floors, and the rooms on each. */
+  _house(rooms) {
+    if (rooms.length === 0) return '<section class="card"><p class="muted">This house has no rooms.</p></section>'
+    const floors = []
+    for (const room of rooms) {
+      const name = room.floor || 'Other rooms'
+      let floor = floors.find((f) => f.name === name)
+      if (!floor) floors.push((floor = { name, rooms: [] }))
+      floor.rooms.push(room)
+    }
+    const off = this._data.rooms_off || []
+    return floors
+      .map(
+        (floor) => `
+        <section class="card">
+          <h2>${esc(floor.name)}</h2>
+          <div class="tiles">
+            ${floor.rooms
+              .map((room) => {
+                const count = room.entities.filter((e) => !e.entity_id.startsWith('scene.')).length
+                return `
+                  <button class="tile" data-do="open-room" data-id="${esc(room.id)}">
+                    <strong>${esc(room.name)}</strong>
+                    <span class="muted">${count} ${count === 1 ? 'device' : 'devices'}</span>
+                    ${off.includes(room.id) ? '<span class="state off">Scheduling off</span>' : ''}
+                  </button>`
+              })
+              .join('')}
+          </div>
+        </section>`,
+      )
+      .join('')
+  }
+
+  /** One room: its scheduling switch, and everything in it. */
+  _roomPage(room) {
+    const off = (this._data.rooms_off || []).includes(room.id)
+    const until = this._until[room.id] || ''
+    const timed = (this._data.changes || []).filter((c) => c.kind === 'room_switch' && c.room === room.id)
+    const entities = room.entities.filter((e) => !e.entity_id.startsWith('scene.'))
+    const lines = entities
+      .map((e) => {
+        const times = this._entityTimes(e.entity_id).filter((t) => !t.past)
+        const next = times.find((t) => !t.suspended)
+        const suspended = times.filter((t) => t.suspended).length
+        const now = this._stateNow(e.entity_id)
         return `
-          <div class="item">
-            <div>
-              <strong>${esc(room.name)}</strong>
-              <span class="state ${off ? 'off' : 'on'}">${off ? 'Off' : 'On'}</span>
-              ${mine.map((c) => `<div class="muted">${esc(c.scheduling === 'off' ? 'Off' : 'On')} ${esc(this._describe(c).when)} <button class="room-link" data-do="remove" data-id="${esc(c.id)}">Remove</button></div>`).join('')}
-            </div>
-            <div class="row">
-              <button class="btn ghost" data-do="switch" data-id="${esc(room.id)}" data-to="${off ? 'on' : 'off'}" ${this._busy ? 'disabled' : ''}>Turn ${off ? 'on' : 'off'}</button>
-              <input type="date" data-until="${esc(room.id)}" min="${esc(this._data.today)}" value="${esc(until)}" aria-label="Until which date">
-              <button class="btn ghost" data-do="until" data-id="${esc(room.id)}" data-to="${off ? 'on' : 'off'}" ${until && !this._busy ? '' : 'disabled'}>${off ? 'On' : 'Off'} until then</button>
-            </div>
-          </div>`
+          <button class="line" data-do="open-entity" data-id="${esc(e.entity_id)}">
+            <span>
+              <strong>${esc(e.name)}</strong>
+              <span class="muted"><br>${next ? `Next: ${esc(this._date(next.date))} ${esc(next.time.slice(11, 16))}, ${esc(next.text)}` : 'Nothing set in the coming week'}${suspended ? ` · ${suspended} suspended` : ''}</span>
+            </span>
+            <span class="tag">${esc(now)}</span>
+          </button>`
       })
       .join('')
     return `
+      <button class="back" data-do="open-room" data-id="">‹ All rooms</button>
       <section class="card">
-        <h2>Room scheduling</h2>
-        <p class="muted">While a room's scheduling is off, automations skip that room. Turn it off or on with no end, or pick a date and it goes back by itself the day after.</p>
-        ${rows || '<p class="muted">This house has no rooms.</p>'}
+        <div class="row between">
+          <h2>${esc(room.name)}</h2>
+          <span class="state ${off ? 'off' : 'on'}">Scheduling ${off ? 'off' : 'on'}</span>
+        </div>
+        <p class="muted">While a room's scheduling is off, automations skip this room. Turn it off or on with no end, or pick a date and it goes back by itself the day after.</p>
+        ${timed.map((c) => `<div class="muted">${esc(c.scheduling === 'off' ? 'Off' : 'On')} ${esc(this._describe(c).when)} <button class="room-link" data-do="remove" data-id="${esc(c.id)}">Remove</button></div>`).join('')}
+        <div class="row">
+          <button class="btn" data-do="switch" data-id="${esc(room.id)}" data-to="${off ? 'on' : 'off'}" ${this._busy ? 'disabled' : ''}>Turn scheduling ${off ? 'on' : 'off'}</button>
+          <input type="date" data-until="${esc(room.id)}" min="${esc(this._data.today)}" value="${esc(until)}" aria-label="Until which date">
+          <button class="btn ghost" data-do="until" data-id="${esc(room.id)}" data-to="${off ? 'on' : 'off'}" ${until && !this._busy ? '' : 'disabled'}>${off ? 'On' : 'Off'} until then</button>
+        </div>
+      </section>
+      <section class="card">
+        <h2>In this room</h2>
+        <p class="muted">Tap one to see when it is changed in the coming week.</p>
+        <div class="list">${lines || '<p class="muted">This room has nothing that is scheduled.</p>'}</div>
+      </section>
+      <section class="card">
+        <h2>This room's schedule</h2>
+        <p class="muted">What the automations do in this room in the coming week. Temporary changes are already included.</p>
+      </section>
+      ${this._dayCards(room.id, false).trim() || '<div class="card"><p class="muted">Nothing is set in this room in the coming week.</p></div>'}`
+  }
+
+  /** One entity: each time it is changed in the coming week, to suspend or bring back. */
+  _entityPage(room, entity) {
+    const id = entity.entity_id
+    const times = this._entityTimes(id)
+    const off = (this._data.rooms_off || []).includes(room.id)
+    let rows = ''
+    let day = ''
+    for (const t of times) {
+      if (t.date !== day) {
+        day = t.date
+        rows += `<h3>${esc(this._date(t.date, true))}</h3>`
+      }
+      let action = ''
+      if (t.past) action = '<span class="muted">Done</span>'
+      else if (t.suspended) {
+        action = t.change
+          ? `<button class="btn ghost" data-do="remove" data-id="${esc(t.change)}" ${this._busy ? 'disabled' : ''}>Bring back</button>`
+          : '<span class="muted">Suspended</span>'
+      } else if (t.fixed) action = '<span class="muted">Part of a scene</span>'
+      else {
+        action = `<button class="btn" data-do="suspend" data-id="${esc(id)}" data-date="${esc(t.date)}" data-automation="${esc(t.automation)}" data-room="${esc(t.room)}" ${this._busy ? 'disabled' : ''}>Suspend</button>`
+      }
+      rows += `
+        <div class="item${t.past ? ' auto past' : ''}" style="display:flex">
+          <div>
+            <div><span class="time">${esc(t.time.slice(11, 16))}</span> <strong>${esc(t.name)}</strong></div>
+            <div class="${t.suspended ? 'state off' : 'muted'}">${t.suspended ? 'Suspended: left as it is' : `Set to ${esc(t.text)}`}</div>
+          </div>
+          ${action}
+        </div>`
+    }
+    return `
+      <button class="back" data-do="open-entity" data-id="">‹ ${esc(room.name)}</button>
+      <section class="card">
+        <div class="row between">
+          <h2>${esc(entity.name)}</h2>
+          <span class="tag">${esc(this._stateNow(id))}</span>
+        </div>
+        <p class="muted">These are the times the schedule changes it in the coming week. Suspend one and it is left as it is at that time, that once.</p>
+        ${off ? `<p class="state off">Scheduling is off for ${esc(room.name)}, so nothing here runs.</p>` : ''}
+      </section>
+      <section class="card">
+        <h2>Coming week</h2>
+        ${rows || '<p class="muted">Nothing changes it in the coming week.</p>'}
       </section>`
   }
 
@@ -637,9 +748,29 @@ class RytonClientView extends HTMLElement {
     const today = this._data && this._data.today
     switch (target.dataset.do) {
       case 'tab':
+        // Tapping Rooms again goes back to the whole house.
+        if (id === 'rooms') this._at = { room: '', entity: '' }
         this._tab = id
         this._message = null
         return this._render()
+      case 'open-room':
+        this._at = { room: id, entity: '' }
+        this._message = null
+        return this._render()
+      case 'open-entity':
+        this._at = { ...this._at, entity: id }
+        this._message = null
+        return this._render()
+      case 'suspend':
+        return this._do(
+          () =>
+            this._add(
+              { kind: 'room', automation: target.dataset.automation, room: target.dataset.room, entities: { [id]: null } },
+              target.dataset.date,
+              target.dataset.date,
+            ),
+          'Suspended for that time.',
+        )
       case 'room':
         this._room = this._room === id ? '' : id
         return this._render()
@@ -718,29 +849,9 @@ class RytonClientView extends HTMLElement {
       f.days[Number(el.dataset.day)].on = el.checked
       return this._render()
     }
-    if (el.dataset.entity) {
-      const id = el.dataset.entity
-      const v = el.value
-      if (v === '') delete f.entities[id]
-      else if (v === 'leave') f.entities[id] = null
-      else if (v === 'position') f.entities[id] = { position: 50 }
-      else if (v.startsWith('option:')) f.entities[id] = { option: v.slice(7) }
-      else f.entities[id] = { state: v }
-      return this._render()
-    }
-    if (el.dataset.entityBrightness) {
-      const pct = Math.min(100, Math.max(1, Number(el.value) || 100))
-      f.entities[el.dataset.entityBrightness] = { state: 'on', brightness_pct: pct }
-      return
-    }
-    if (el.dataset.entityPosition) {
-      f.entities[el.dataset.entityPosition] = { position: Math.min(100, Math.max(0, Number(el.value) || 0)) }
-      return
-    }
     const key = el.dataset.form
     if (!key) return
     f[key] = el.value
-    if (key === 'room') f.entities = {}
     if (key === 'from' && (!f.until || f.until < f.from)) f.until = f.from
     if ((key === 'from' || key === 'until') && f.from && f.until && f.until >= f.from) {
       await this._findDays()
@@ -771,17 +882,13 @@ class RytonClientView extends HTMLElement {
     const all = f.days.every((d) => d.on)
     const days = all ? 'all' : f.days.filter((d) => d.on).map((d) => d.day)
     let change
-    if (f.what === 'time') {
-      if (f.mode === 'clock') {
-        // A time before the rollover belongs to the end of that night.
-        const late = f.clock < this._data.rollover
-        change = { kind: 'time', automation: f.automation, time: { kind: 'clock', at: f.clock, ...(late ? { day_offset: 1 } : {}) } }
-      } else {
-        const minutes = Math.round(Number(f.minutes)) * (f.direction === 'earlier' ? -1 : 1)
-        change = { kind: 'time', automation: f.automation, shift_minutes: minutes }
-      }
+    if (f.mode === 'clock') {
+      // A time before the rollover belongs to the end of that night.
+      const late = f.clock < this._data.rollover
+      change = { kind: 'time', automation: f.automation, time: { kind: 'clock', at: f.clock, ...(late ? { day_offset: 1 } : {}) } }
     } else {
-      change = { kind: 'room', automation: f.automation, room: f.room, entities: f.entities }
+      const minutes = Math.round(Number(f.minutes)) * (f.direction === 'earlier' ? -1 : 1)
+      change = { kind: 'time', automation: f.automation, shift_minutes: minutes }
     }
     return this._do(async () => {
       await this._add(change, f.from, f.until, days)

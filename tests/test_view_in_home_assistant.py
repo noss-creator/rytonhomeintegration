@@ -18,6 +18,7 @@ pytest.importorskip("pytest_homeassistant_custom_component.common")
 from custom_components.ryton_home_automations.const import DOMAIN  # noqa: E402
 from custom_components.ryton_home_automations.view import async_view_data  # noqa: E402
 
+from .test_day_list import make_schedule  # noqa: E402
 from .test_time_travel import (  # noqa: E402, F401
     START,
     _enable_custom_integrations,
@@ -57,6 +58,43 @@ async def test_the_view_lists_the_coming_days_with_what_each_automation_does(hou
     rooms = today["automations"][0]["rooms"]
     assert [room["room"] for room in rooms] == ["hall"]
     assert rooms[0]["text"].startswith("scene ")
+    # A scene made in Home Assistant that the house knows nothing of sets no entity it can list.
+    assert today["automations"][0]["sets"] == []
+
+
+async def test_the_view_lists_what_each_automation_sets_entity_by_entity(house):
+    schedule = make_schedule()
+    schedule["days"]["weekday"]["automations"][0]["rooms"] = {
+        "den": {"entities": {"light.den": {"state": "on", "brightness_pct": 40}}}
+    }
+    house.write_schedule(schedule)
+    await house.reload_schedule()
+    data = await async_view_data(house.hass, 1)
+    morning = data["days"][0]["automations"][0]
+    assert morning["sets"] == [
+        {"room": "den", "entity": "light.den", "text": "on, 40%", "fixed": False}
+    ]
+
+    # Suspended for today: the entity is no longer among what Morning sets.
+    await house.hass.services.async_call(
+        DOMAIN,
+        "add_change",
+        {
+            "change": {
+                "from": START.isoformat(),
+                "until": START.isoformat(),
+                "days": "all",
+                "kind": "room",
+                "automation": "morning",
+                "room": "den",
+                "entities": {"light.den": None},
+            }
+        },
+        blocking=True,
+    )
+    data = await async_view_data(house.hass, 2)
+    assert data["days"][0]["automations"][0]["sets"] == []
+    assert data["days"][1]["automations"][0]["sets"] == morning["sets"]
 
 
 async def test_an_automation_that_has_run_is_marked_past(house):

@@ -37,7 +37,7 @@ from .engine.away import (
 )
 from .engine.changes import AWAY, MEAL_OUT
 from .engine.preview import LOOK_AHEAD_DAYS, LOOK_BACK_DAYS
-from .engine.describe import automation_title, day_name, describe_by_room
+from .engine.describe import automation_title, day_name, describe_by_entity, describe_by_room
 from .engine.scenes import schedule_scenes
 from .engine.time_resolver import ScheduleError
 
@@ -180,6 +180,17 @@ async def async_view_data(hass: HomeAssistant, days: int) -> dict[str, Any]:
     except ScheduleError:
         scenes = {}
 
+    inventory = syncer.inventory() if syncer is not None else {}
+    floors = [*inventory.get("floors", []), {"rooms": inventory.get("rooms_with_no_floor", [])}]
+    # What each scene made in Home Assistant sets its entities to, in words.
+    scene_sets = {
+        entity["entity_id"]: entity["sets"]
+        for floor in floors
+        for room in floor.get("rooms", [])
+        for entity in room["entities"]
+        if entity.get("sets")
+    }
+
     # Yesterday's list too: its Night may still be to come, after midnight.
     lists = await scheduler.async_day_lists(
         today - timedelta(days=1), today + timedelta(days=days - 1)
@@ -199,6 +210,10 @@ async def async_view_data(hass: HomeAssistant, days: int) -> dict[str, Any]:
                         automation.rooms, scenes, entity_name, day_list.rooms_off
                     )
                 ],
+                # The same, one entry for each entity it sets.
+                "sets": describe_by_entity(
+                    automation.rooms, scenes, scene_sets, day_list.rooms_off
+                ),
             }
             for automation in day_list.automations
         ]
@@ -219,10 +234,9 @@ async def async_view_data(hass: HomeAssistant, days: int) -> dict[str, Any]:
             }
         )
 
-    inventory = syncer.inventory() if syncer is not None else {}
     rooms = [
         {"id": room["id"], "name": room["name"], "floor": floor.get("name"), "entities": room["entities"]}
-        for floor in [*inventory.get("floors", []), {"rooms": inventory.get("rooms_with_no_floor", [])}]
+        for floor in floors
         for room in floor.get("rooms", [])
     ]
     settings = scheduler.schedule.get("settings", {})

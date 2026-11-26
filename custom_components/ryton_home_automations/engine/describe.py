@@ -51,6 +51,48 @@ def describe_by_room(
     return found
 
 
+def describe_by_entity(
+    rooms: Mapping[str, Any],
+    scenes: Mapping[str, Mapping[str, Any]],
+    scene_sets: Mapping[str, Mapping[str, str]],
+    rooms_off: Collection[str] = (),
+) -> list[dict[str, Any]]:
+    """Return what an automation sets, one entry for each entity.
+
+    Each entry has the ``room`` of the automation the entity is set in, the
+    ``entity``, and ``text``: what it is set to, in words. ``scene_sets``
+    holds, for each scene made in Home Assistant, what it sets each of its
+    entities to. An entity set by such a scene is ``fixed``: the scene still
+    runs, so the entity cannot be left as it is.
+    """
+    found: list[dict[str, Any]] = []
+    for room, body in expand_scenes(rooms, scenes).items():
+        if room in rooms_off or not isinstance(body, Mapping):
+            continue
+        own = {
+            entity_id: action
+            for entity_id, action in (body.get("entities") or {}).items()
+            if isinstance(action, Mapping)
+        }
+        scene = body.get("scene")
+        if isinstance(scene, str):
+            for entity_id, words in (scene_sets.get(scene) or {}).items():
+                if entity_id not in own:
+                    found.append(
+                        {"room": room, "entity": entity_id, "text": str(words).lower(), "fixed": True}
+                    )
+        for entity_id, action in own.items():
+            found.append(
+                {
+                    "room": room,
+                    "entity": entity_id,
+                    "text": describe_action(action).lower(),
+                    "fixed": False,
+                }
+            )
+    return found
+
+
 _DAY_ENDINGS = (
     ("__friday", " on Friday"),
     ("__shabbos", " on Shabbos"),

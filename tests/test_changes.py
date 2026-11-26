@@ -214,6 +214,14 @@ def test_a_room_change_leaves_an_entity_as_is():
     assert rooms_of(got, "morning")["den"]["entities"] == {"light.den_b": {"state": "on"}}
 
 
+def test_two_entities_suspended_one_by_one_are_both_left_as_is():
+    one = change("room", automation="morning", room="den", entities={"light.den_a": None})
+    two = change("room", automation="morning", room="den", entities={"light.den_b": None})
+    got = build(schedule_with_entities(), TUESDAY, changes=[one, two])
+    assert not rooms_of(got, "morning").get("den", {}).get("entities")
+    assert got.skipped_changes == ()
+
+
 def test_a_room_change_does_not_alter_the_schedule_itself():
     schedule = schedule_with_entities()
     dim = change("room", automation="morning", room="den", entities={"light.den_a": None})
