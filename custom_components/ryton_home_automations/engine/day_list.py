@@ -13,15 +13,36 @@ never stops the schedule itself from running.
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, tzinfo
 from typing import Any
 
-from .actions import cycle_moments, cycle_of
+from .actions import cycle_moments, cycle_of, latest_state
+from .away import (
+    OFF,
+    ROOMS,
+    Mode,
+    away_changes,
+    check_away_dates,
+    has_away,
+    mode_at,
+    preset_schedule,
+    rollover_at,
+    switch_moments,
+)
 from .alongside import alongside_for
-from .changes import ROOM, SHABBOS, SIMCHA, TIME, active_changes, rooms_off_for
+from .changes import (
+    MEAL_OUT,
+    ROOM,
+    SHABBOS,
+    SIMCHA,
+    TIME,
+    active_changes,
+    rooms_off_for,
+)
+from .calendar_snapshot import CalendarDataError
 from .calendar_source import CalendarSource
-from .day_resolver import ResolvedDay, resolve_day
+from .day_resolver import ResolvedDay, UnresolvedDayError, resolve_day
 from .scenes import expand_scenes, schedule_scenes
 from .day_tables import CHOL_HAMOED, table_for
 from .time_resolver import (
@@ -51,6 +72,9 @@ class ScheduledAutomation:
     alongside: bool = False
     # For one moment of a cycle: the automation that started the cycle.
     part_of: str | None = None
+    # Its rooms may hold a scene and entities together, and nothing fades:
+    # it brings rooms straight to a state, as when away mode starts or ends.
+    merged: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,13 +94,22 @@ class DayList:
     # Every later moment of the cycles the automations start, each switching
     # one entity on or off. They run like automations but are not shown.
     cycle_steps: tuple[ScheduledAutomation, ...] = ()
+    # The moments at which away mode starts, ends or changes, each bringing
+    # the rooms to where they should then be. They run but are not shown.
+    switches: tuple[ScheduledAutomation, ...] = ()
 
     @property
     def moments(self) -> tuple[ScheduledAutomation, ...]:
         """Everything that runs on this date, in time order."""
-        if not self.cycle_steps:
+        if not self.cycle_steps and not self.switches:
             return self.automations
-        return tuple(sorted((*self.automations, *self.cycle_steps), key=lambda a: a.time))
+        # A switch comes first where it shares its moment with an automation.
+        return tuple(
+            sorted(
+                (*self.switches, *self.automations, *self.cycle_steps),
+                key=lambda a: a.time,
+            )
+        )
 
 
 def _cycle_steps(automation: ScheduledAutomation) -> list[ScheduledAutomation]:
@@ -146,26 +179,39 @@ def check_schedule(schedule: Mapping[str, Any]) -> None:
         if not isinstance(schedule.get(key), Mapping):
             raise ScheduleError(f"The schedule has no {key}")
     schedule_scenes(schedule)
+    check_away_dates(schedule)
 
 
-def _day_entry(schedule: Mapping[str, Any], day_id: str) -> Mapping[str, Any]:
+def _day_entry(
+    schedule: Mapping[str, Any], day_id: str, lenient: bool = False
+) -> Mapping[str, Any]:
     entry = schedule["days"].get(day_id)
     if not isinstance(entry, Mapping):
+        if lenient:
+            # A preset does not have this day: it runs nothing.
+            return {}
         raise ScheduleError(f"The schedule has no day {day_id!r}")
     return entry
 
 
 def resolve_schedule_day(
-    schedule: Mapping[str, Any], day: date, source: CalendarSource
+    schedule: Mapping[str, Any],
+    day: date,
+    source: CalendarSource,
+    lenient: bool = False,
 ) -> Any:
-    """Return which of the schedule's days ``day`` is. No times are worked out."""
+    """Return which of the schedule's days ``day`` is. No times are worked out.
+
+    ``lenient`` is for a preset, which may lack days: a combination day it
+    does not have counts as switched off.
+    """
     settings = schedule["settings"]
     table = table_for(settings.get("yom_tov_days"), settings.get("purim"))
     return resolve_day(
         day,
         source,
         table,
-        lambda day_id: bool(_day_entry(schedule, day_id).get("enabled")),
+        lambda day_id: bool(_day_entry(schedule, day_id, lenient).get("enabled")),
         lambda day_id: isinstance(schedule["days"].get(day_id), Mapping),
     )
 
@@ -180,8 +226,167 @@ def build_day_list(
     simcha: bool = False,
     changes: Iterable[Any] = (),
     rooms_off: Collection[str] = (),
+    house_rooms: Mapping[str, Collection[str]] | None = None,
+    away: bool = True,
 ) -> DayList:
-    """Return the fixed list for ``day``.
+    """Return the fixed list for ``day``, with away mode taken into account.
+
+    While the house is away, the automations of the regular schedule are
+    left out and, where a preset runs, the preset's are put in their place.
+    Each moment at which away mode starts, ends or changes is added as a
+    switch that brings the rooms to where they should then be.
+
+    ``house_rooms`` holds, for each room of the house, the entities that are
+    switched on and off. It is what "everything off" switches off. ``away``
+    false gives the regular schedule whatever the away dates say.
+    """
+    changes = list(changes)
+    regular = _base_list(
+        schedule, day, source, tz,
+        one_week=one_week, simcha=simcha, changes=changes, rooms_off=rooms_off,
+    )
+    if not away or not has_away(schedule, changes):
+        return regular
+
+    client = away_changes(schedule, changes)
+
+    def mode(moment: datetime) -> Mode | None:
+        return mode_at(schedule, client, moment, tz)
+
+    bases: dict[tuple[str | None, date], DayList | None] = {(None, day): regular}
+
+    def base(preset_id: str | None, of: date) -> DayList | None:
+        """The whole list of the regular schedule or a preset for a date, if it can be fixed."""
+        key = (preset_id, of)
+        if key not in bases:
+            try:
+                if preset_id is None:
+                    bases[key] = _base_list(
+                        schedule, of, source, tz, changes=changes, rooms_off=rooms_off
+                    )
+                else:
+                    bases[key] = _base_list(
+                        preset_schedule(schedule, preset_id), of, source, tz,
+                        one_week=one_week if of == day else None,
+                        simcha=simcha and of == day,
+                        changes=changes, rooms_off=rooms_off, lenient=True,
+                    )
+            except _LIST_FAILS:
+                bases[key] = None
+        return bases[key]
+
+    def kept(automation: ScheduledAutomation, of: Mode | None) -> ScheduledAutomation | None:
+        """The automation as it runs in the mode at its own time, or None."""
+        now = mode(automation.time)
+        if now is None or now.run != ROOMS:
+            return automation if now == of else None
+        if of is not None:
+            return None  # only the regular schedule runs in the rooms that stay on
+        rooms = {room: body for room, body in automation.rooms.items() if room in now.rooms}
+        return replace(automation, rooms=rooms)
+
+    switches = switch_moments(schedule, client, day, tz)
+    preset_ids = {
+        found.run
+        for found in (mode(rollover_at(day, schedule, tz)), *(after for _, after in switches))
+        if found is not None and found.run not in (OFF, ROOMS)
+    }
+
+    automations = [a for a in (kept(a, None) for a in regular.automations) if a is not None]
+    for preset_id in sorted(preset_ids):
+        listed = base(preset_id, day)
+        if listed is not None:
+            automations += [
+                a for a in (kept(a, Mode(preset_id)) for a in listed.automations) if a is not None
+            ]
+    automations.sort(key=lambda a: a.time)
+
+    cycle_steps = []
+    for automation in automations:
+        running = mode(automation.time)
+        cycle_steps += [
+            step for step in _cycle_steps(automation) if mode(step.time) == running
+        ]
+
+    def state_at(preset_id: str | None, moment: datetime) -> dict[str, Any]:
+        """Where a schedule has each room at a moment, from this date and the one before."""
+        lists = [base(preset_id, of) for of in (day - timedelta(days=1), day)]
+        ran = [
+            item
+            for listed in lists
+            if listed is not None
+            for item in listed.moments
+            if item.time <= moment
+        ]
+        ran.sort(key=lambda a: a.time)
+        try:
+            return latest_state([item.rooms for item in ran])
+        except ScheduleError:
+            return {}
+
+    def everything_off(but: Collection[str] = ()) -> dict[str, Any]:
+        return {
+            room: {"entities": {entity_id: {"state": "off"} for entity_id in entities}}
+            for room, entities in (house_rooms or {}).items()
+            if room not in but and entities
+        }
+
+    made = []
+    for moment, after in switches:
+        if after is None:
+            name, rooms = "Away mode ends", state_at(None, moment)
+        elif after.run == OFF:
+            name, rooms = "Away mode starts", everything_off()
+        elif after.run == ROOMS:
+            staying = state_at(None, moment)
+            rooms = {
+                **everything_off(but=after.rooms),
+                **{room: body for room, body in staying.items() if room in after.rooms},
+            }
+            name = "Away mode starts"
+        else:
+            name, rooms = "Away mode starts", state_at(after.run, moment)
+        if rooms:
+            made.append(
+                ScheduledAutomation(
+                    f"away#{moment.isoformat()}", name, moment, 0, rooms,
+                    part_of="away", merged=True,
+                )
+            )
+
+    return replace(
+        regular,
+        automations=tuple(automations),
+        cycle_steps=tuple(sorted(cycle_steps, key=lambda a: a.time)),
+        switches=tuple(made),
+    )
+
+
+# What can stop a date's list from being fixed.
+_LIST_FAILS = (
+    ScheduleError,
+    PastRolloverError,
+    ZmanUnavailableError,
+    UnresolvedDayError,
+    CalendarDataError,
+)
+
+
+def _base_list(
+    schedule: Mapping[str, Any],
+    day: date,
+    source: CalendarSource,
+    tz: tzinfo,
+    *,
+    one_week: Mapping[str, Any] | None = None,
+    simcha: bool = False,
+    changes: Iterable[Any] = (),
+    rooms_off: Collection[str] = (),
+    lenient: bool = False,
+) -> DayList:
+    """Return the fixed list of one schedule for ``day``, away mode aside.
+
+    ``lenient`` is for a preset: a day it does not have runs nothing.
 
     ``one_week`` is a one-week Shabbos switch for this week, and ``simcha``
     says whether simcha mode is on for this date. ``changes`` holds the
@@ -195,10 +400,12 @@ def build_day_list(
     rollover = settings.get("day_rollover", "04:00")
 
     table = table_for(settings.get("yom_tov_days"), settings.get("purim"))
-    resolved = resolve_schedule_day(schedule, day, source)
-    entry = _day_entry(schedule, resolved.day_id)
+    resolved = resolve_schedule_day(schedule, day, source, lenient)
+    entry = _day_entry(schedule, resolved.day_id, lenient)
 
     active = active_changes(changes, day, resolved.day_id)
+    # The meals the family is out for on this date.
+    meals_out = [change["meal"] for change in active if change["kind"] == MEAL_OUT]
     skipped: list[tuple[str, str]] = []
     used: set[str] = set()
     week_changes = [change for change in active if change["kind"] == SHABBOS]
@@ -261,6 +468,17 @@ def build_day_list(
                 continue
             return asked
         return when
+
+    def out_for_meal(automation: Mapping[str, Any]) -> Mapping[str, Any]:
+        """The automation's rooms, with those set differently when out for a meal."""
+        rooms = automation.get("rooms", {})
+        when_out = automation.get("when_out")
+        if not meals_out or not isinstance(when_out, Mapping):
+            return rooms
+        for meal in meals_out:
+            if isinstance(when_out.get(meal), Mapping):
+                rooms = {**rooms, **when_out[meal]}
+        return rooms
 
     def changed_rooms(automation_id: str, rooms: Mapping[str, Any]) -> Mapping[str, Any]:
         """The automation's rooms with the client's room changes laid on top."""
@@ -327,7 +545,7 @@ def build_day_list(
                 automation.get("name", automation_id),
                 when,
                 automation.get("fade_seconds", 0),
-                changed_rooms(automation_id, automation.get("rooms", {})),
+                changed_rooms(automation_id, out_for_meal(automation)),
             )
         )
 
@@ -349,7 +567,7 @@ def build_day_list(
                 automation.get("name", applies.id),
                 changed_time(applies.id, fix(spec, allow), allow),
                 automation.get("fade_seconds", 0),
-                changed_rooms(applies.id, automation.get("rooms", {})),
+                changed_rooms(applies.id, out_for_meal(automation)),
                 alongside=True,
             )
         )

@@ -17,8 +17,10 @@ from .day_resolver import UnresolvedDayError
 from .time_resolver import PastRolloverError, ScheduleError, ZmanUnavailableError
 
 # How far the running-alongside automations look around a date: back to the
-# first evening of Chanukah, ahead to the coming Rosh Hashana.
-LOOK_BACK_DAYS = 8
+# first evening of Chanukah, ahead to the coming Rosh Hashana. One day more
+# is looked back, for the day before: away mode reads it to know where each
+# room should be.
+LOOK_BACK_DAYS = 9
 LOOK_AHEAD_DAYS = 10
 
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Shabbos", "Sunday")
@@ -57,7 +59,8 @@ def build_preview(
             row["hebrew_date"] = f"{hebrew.day} {hebrew.month} {hebrew.year}"
             check_schedule(schedule)
             row["day"] = resolve_schedule_day(schedule, day, source).day_id
-            day_list = build_day_list(schedule, day, source, tz)
+            # The regular schedule, whatever the yearly away dates say.
+            day_list = build_day_list(schedule, day, source, tz, away=False)
         except (
             CalendarDataError,
             PastRolloverError,

@@ -23,7 +23,11 @@ ROOM = "room"
 ROOM_SWITCH = "room_switch"
 SHABBOS = "shabbos"
 SIMCHA = "simcha"
-KINDS = (TIME, ROOM, ROOM_SWITCH, SHABBOS, SIMCHA)
+AWAY = "away"
+MEAL_OUT = "meal_out"
+KINDS = (TIME, ROOM, ROOM_SWITCH, SHABBOS, SIMCHA, AWAY, MEAL_OUT)
+
+_MEALS = ("night", "day", "shalosh_seudos")
 
 ALL_DAYS = "all"
 
@@ -117,6 +121,31 @@ def check_change(change: Any) -> None:
                 raise ChangeError("An early Shabbos change needs its start time")
         elif week != "late":
             raise ChangeError('A Shabbos change says "week": "early" or "late"')
+    elif kind == AWAY:
+        _text(change, "run")
+        moments = []
+        for key in ("starts_at", "ends_at"):
+            try:
+                moments.append(datetime.fromisoformat(_text(change, key)))
+            except ValueError:
+                raise ChangeError(f"{change.get(key)!r} is not a date and time") from None
+            if moments[-1].tzinfo is None:
+                raise ChangeError(f"An away change's {key} has no timezone")
+        if moments[1] < moments[0]:
+            raise ChangeError("Away mode ends before it starts")
+        if change["run"] == "rooms":
+            rooms = change.get("rooms")
+            if (
+                not isinstance(rooms, Sequence)
+                or isinstance(rooms, str)
+                or not all(isinstance(room, str) and room for room in rooms)
+            ):
+                raise ChangeError("Away mode by rooms needs its list of rooms")
+    elif kind == MEAL_OUT:
+        if change.get("meal") not in _MEALS:
+            raise ChangeError("Away for a meal names the night meal, the day meal or shalosh seudos")
+        if change["from"] != change["until"]:
+            raise ChangeError("Away for a meal is for one date")
     elif kind != SIMCHA:
         raise ChangeError(f"Unknown kind of temporary change: {kind!r}")
 
