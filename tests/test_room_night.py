@@ -74,15 +74,6 @@ def test_a_room_night_does_not_set_has_no_night_of_its_own():
     assert rooms_at(got) == rooms_at(build(make_schedule(), TUESDAY))
 
 
-def test_on_a_simcha_night_the_childs_room_goes_by_the_usual_night():
-    got = child({"minutes": 180}, simcha=True)
-    tomorrow = TUESDAY + timedelta(days=1)
-    assert rooms_at(got)[-2:] == [
-        ("night#own:hall", at(TUESDAY, "20:00"), ["hall"]),
-        ("night", at(tomorrow, "01:00"), []),
-    ]
-
-
 def test_a_time_change_to_night_moves_the_childs_night_with_it():
     change = {
         "id": "c1",
@@ -153,18 +144,6 @@ def test_an_adults_night_not_between_night_and_the_days_end_changes_nothing(how)
 
 def test_an_adults_night_just_before_the_day_starts_over():
     assert rooms_at(adult({"minutes": 299}))[-1] == ("night#own:hall", at(WEDNESDAY, "03:59"), ["hall"])
-
-
-def test_on_a_simcha_night_an_adults_night_must_be_after_the_later_night():
-    # Simcha puts Night at 01:00. An hour after the usual 23:00 is before that.
-    assert rooms_at(adult({"minutes": 60}, simcha=True)) == rooms_at(
-        build(make_schedule(), TUESDAY, simcha=True)
-    )
-    got = adult({"minutes": 180}, simcha=True)
-    assert rooms_at(got)[-2:] == [
-        ("night", at(WEDNESDAY, "01:00"), []),
-        ("night#own:hall", at(WEDNESDAY, "02:00"), ["hall"]),
-    ]
 
 
 def test_a_child_and_an_adult_in_two_rooms():
@@ -276,16 +255,6 @@ def test_a_room_time_on_one_day_is_not_on_another():
     night = next(a for a in schedule["days"]["weekday"]["automations"] if a["id"] == "night")
     night["room_times"] = {"hall": {"minutes": -60}}
     assert not any(a.id.startswith("night#own:") for a in build(schedule, FRIDAY).automations)
-
-
-def test_on_a_simcha_night_the_schedules_later_time_must_be_after_the_later_night():
-    assert rooms_at(timed({"minutes": 45}, simcha=True)) == rooms_at(
-        build(make_schedule(), TUESDAY, simcha=True)
-    )
-    assert rooms_at(timed({"minutes": -60}, simcha=True))[-2:] == [
-        ("night#own:hall", at(TUESDAY, "22:00"), ["hall"]),
-        ("night", at(WEDNESDAY, "01:00"), []),
-    ]
 
 
 def test_a_room_time_is_checked():

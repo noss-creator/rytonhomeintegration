@@ -378,7 +378,8 @@ def test_simcha_over_a_range_of_dates_moves_each_night():
     for offset in (0, 1):
         day = TUESDAY + timedelta(days=offset)
         got = build(make_schedule(), day, changes=[simcha])
-        assert time_of(got, "night") == at(day, "01:00", day_offset=1)
+        assert time_of(got, "night") == at(day, "23:00")
+        assert time_of(got, "night#simcha") == at(day, "01:00", day_offset=1)
     after = TUESDAY + timedelta(days=2)
     assert time_of(build(make_schedule(), after, changes=[simcha]), "night") == at(after, "23:00")
 
@@ -387,7 +388,8 @@ def test_simcha_is_laid_on_top_of_a_changed_night():
     simcha = change("simcha")
     moved = change("time", automation="night", time={"kind": "clock", "at": "22:00"})
     got = build(make_schedule(), TUESDAY, changes=[simcha, moved])
-    assert time_of(got, "night") == at(TUESDAY, "01:00", day_offset=1)
+    assert time_of(got, "night") == at(TUESDAY, "22:00")
+    assert time_of(got, "night#simcha") == at(TUESDAY, "01:00", day_offset=1)
 
 
 def test_simcha_with_no_simcha_time_is_skipped_and_the_day_still_runs():
@@ -436,7 +438,7 @@ def test_every_date_in_two_years_builds_with_changes_on_top(yom_tov_days):
         plain = build(schedule, day)
         got = build(schedule, day, changes=changes)
         assert got.day == plain.day
-        assert {a.id for a in got.automations} == {a.id for a in plain.automations}
+        assert {a.id for a in got.automations} - {"night#simcha"} == {a.id for a in plain.automations}
         assert got.rooms_off == frozenset({"hall"})
         assert time_of(got, "morning") == at(day, "08:00")
         assert time_of(got, "sunset") == time_of(plain, "sunset")

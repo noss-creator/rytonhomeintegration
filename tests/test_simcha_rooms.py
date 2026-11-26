@@ -117,9 +117,13 @@ def test_on_a_night_with_no_simcha_the_rooms_keep_their_own_night():
     assert nights(got)[0] == ("night#own:hall", at(TUESDAY, "21:00"), ["hall"])
 
 
-def test_a_schedule_from_before_simcha_rooms_moves_the_whole_house():
-    got = build(make_schedule(), TUESDAY, changes=[change("simcha", at="00:30")])
-    assert nights(got) == [("night", at(WEDNESDAY, "00:30"), ["hall"])]
+def test_a_schedule_that_names_no_simcha_rooms_runs_as_usual():
+    # As one made before simcha rooms: simcha mode changes nothing.
+    schedule = make_schedule()
+    del schedule["settings"]["simcha"]["rooms"]
+    got = build(schedule, TUESDAY, changes=[change("simcha", at="00:30")])
+    assert nights(got) == [("night", at(TUESDAY, "23:00"), ["hall"])]
+    assert got.skipped_changes == ()
 
 
 def test_the_clients_simcha_time_is_checked():

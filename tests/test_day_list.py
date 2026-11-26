@@ -98,7 +98,10 @@ def make_schedule(yom_tov_days=2, purim="regular"):
             "purim": purim,
             "selichos": {"from_motzei_shabbos": True, "from_elul": False},
             "early_shabbos_rules": [],
-            "simcha": {"night_time": {"kind": "clock", "at": "01:00", "day_offset": 1}},
+            "simcha": {
+                "night_time": {"kind": "clock", "at": "01:00", "day_offset": 1},
+                "rooms": ["hall"],
+            },
             "pacing": {"group_size": 5, "pause_seconds": 1},
             "day_rollover": "04:00",
         },
@@ -226,9 +229,13 @@ def test_switched_off_combination_runs_the_yom_tovs_own_day():
 # --- simcha mode -----------------------------------------------------------
 
 
-def test_simcha_mode_moves_night_later():
+def test_simcha_mode_moves_the_night_of_the_simcha_rooms_later():
     got = build(make_schedule(), TUESDAY, simcha=True)
-    assert times(got)[-1] == ("night", at(TUESDAY, "01:00", day_offset=1))
+    assert times(got)[-2:] == [
+        ("night", at(TUESDAY, "23:00")),
+        ("night#simcha", at(TUESDAY, "01:00", day_offset=1)),
+    ]
+    assert [sorted(a.rooms) for a in got.automations[-2:]] == [[], ["hall"]]
     assert times(got)[:2] == times(build(make_schedule(), TUESDAY))[:2]
 
 

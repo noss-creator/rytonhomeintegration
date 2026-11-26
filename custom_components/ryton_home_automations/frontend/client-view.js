@@ -673,15 +673,13 @@ class RytonClientView extends HTMLElement {
     return this._quick.simchaAt || this._data.simcha_time || ''
   }
 
-  /** Whether simcha mode would do anything: the house has simcha rooms, or is from before them. */
+  /** Whether simcha mode would do anything: the house has simcha rooms. */
   _simchaCan() {
-    const rooms = this._data.simcha_rooms
-    return !rooms || rooms.length > 0
+    return (this._data.simcha_rooms || []).length > 0
   }
 
   _simchaWords() {
-    const rooms = this._data.simcha_rooms
-    if (!rooms) return '<p class="muted">Night runs later on the dates you choose, at the time you enter.</p>'
+    const rooms = this._data.simcha_rooms || []
     if (rooms.length === 0) {
       return '<p class="muted">This house has no simcha rooms set, so it cannot be used yet.</p>'
     }

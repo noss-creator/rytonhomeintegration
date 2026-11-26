@@ -587,15 +587,16 @@ def _base_list(
                     skipped.extend((change["id"], str(error)) for change in simcha_changes)
                 used.update(change["id"] for change in simcha_changes)
             if late is not None:
-                if isinstance(simcha_set.get("rooms"), list):
-                    # The schedule names the simcha rooms: only they are late,
-                    # and the house's Night keeps its time.
-                    simcha_at = late
-                    simcha_rooms = {room for room in simcha_set["rooms"] if isinstance(room, str)}
-                else:
-                    # A schedule from before simcha rooms: the whole house is
-                    # late. Simcha mode only ever makes Night later.
-                    when = max(when, late)
+                # Only the simcha rooms the schedule names are late, and the
+                # house's Night keeps its time. A schedule that names none,
+                # as one made before simcha rooms, has no late rooms.
+                rooms = simcha_set.get("rooms")
+                simcha_at = late
+                simcha_rooms = (
+                    {room for room in rooms if isinstance(room, str)}
+                    if isinstance(rooms, list)
+                    else set()
+                )
 
         automations.append(
             ScheduledAutomation(
