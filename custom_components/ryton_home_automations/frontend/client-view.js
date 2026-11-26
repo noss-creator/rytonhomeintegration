@@ -76,6 +76,7 @@ class RytonClientView extends HTMLElement {
     this._form = this._emptyForm()
     this._quick = { early: '', simchaFrom: '', simchaUntil: '' }
     this._until = {}
+    this._away = { run: 'off', rooms: null, end: 'motzei', date: '' }
     this._timer = null
     this.shadowRoot.addEventListener('click', (event) => this._click(event))
     this.shadowRoot.addEventListener('change', (event) => this._change(event))
@@ -248,13 +249,14 @@ class RytonClientView extends HTMLElement {
       ['upcoming', 'Upcoming'],
       ['changes', 'Temporary changes'],
       ['quick', 'Quick switches'],
+      ['away', 'Away'],
       ['rooms', 'Rooms'],
     ]
     let body = '<div class="card"><p class="muted">Loading…</p></div>'
     if (this._data && !this._data.ready) {
       body = '<div class="card"><p>This house has no schedule yet.</p></div>'
     } else if (this._data) {
-      body = { upcoming: () => this._upcoming(), changes: () => this._changes(), quick: () => this._quickTab(), rooms: () => this._rooms() }[this._tab]()
+      body = { upcoming: () => this._upcoming(), changes: () => this._changes(), quick: () => this._quickTab(), away: () => this._awayTab(), rooms: () => this._rooms() }[this._tab]()
     }
     const message = this._message
       ? `<p class="${this._message.error ? 'error' : 'notice'}" role="status">${esc(this._message.error || this._message.notice)}</p>`
@@ -320,7 +322,10 @@ class RytonClientView extends HTMLElement {
           </section>`
       })
       .join('')
-    return filter + (days.trim() ? days : '<div class="card"><p>Nothing is coming up in the next week.</p></div>')
+    const away = this._data.away
+      ? `<div class="card"><p><strong>Away mode is on: ${esc(this._data.away.name)}.</strong> What is listed below is what runs while it is on.</p></div>`
+      : ''
+    return away + filter + (days.trim() ? days : '<div class="card"><p>Nothing is coming up in the next week.</p></div>')
   }
 
   _changeList(kinds) {
@@ -500,6 +505,93 @@ class RytonClientView extends HTMLElement {
       </section>`
   }
 
+  _moment(iso) {
+    return `${this._date(iso.slice(0, 10), true)} at ${iso.slice(11, 16)}`
+  }
+
+  _awayTab() {
+    const data = this._data
+    const a = this._away
+    const rooms = data.rooms || []
+    const presets = data.presets || []
+    const now = data.away
+    if (a.run !== 'off' && a.run !== 'rooms' && !presets.some((p) => p.id === a.run)) a.run = 'off'
+    if (a.end === 'motzei' && !data.motzei) a.end = 'date'
+    const ticked = a.rooms || rooms.map((r) => r.id)
+
+    let state = '<p class="muted">Away mode is off. The house runs its regular schedule.</p>'
+    if (now) {
+      const which =
+        now.run === 'rooms'
+          ? `Only these rooms run: ${now.rooms.map((r) => this._roomName(r)).join(', ') || 'none'}. Everything else is off.`
+          : now.run === 'off'
+            ? 'Everything is off and nothing runs.'
+            : `The house runs its "${now.name}" schedule.`
+      state =
+        now.by === 'client'
+          ? `<p><strong>Away mode is on.</strong> ${esc(which)}</p>
+             <p class="muted">Until ${esc(this._moment(now.ends_at))}. Then each room goes to where the regular schedule has it.</p>
+             <div><button class="btn danger" data-do="end-away" ${this._busy ? 'disabled' : ''}>End away mode now</button></div>`
+          : `<p><strong>Away mode is on.</strong> ${esc(which)}</p>
+             <p class="muted">These dates are set up for this house every year. Choosing below takes over from them.</p>`
+    }
+
+    const roomChecks =
+      a.run === 'rooms'
+        ? `<div class="field"><span class="muted">Tick the rooms that keep running their regular schedule. The others are switched off.</span>
+             <div class="checks">${rooms.map((r) => `<label><input type="checkbox" data-away-room="${esc(r.id)}" ${ticked.includes(r.id) ? 'checked' : ''}> ${esc(r.name)}</label>`).join('')}</div></div>`
+        : ''
+    const canStart = !this._busy && (a.end === 'motzei' ? Boolean(data.motzei) : Boolean(a.date))
+
+    const meals = data.meals || []
+    const mealRows = meals
+      .map((m) => {
+        // A night meal belongs to the date it starts on: Friday night is listed under Friday.
+        const label = `${m.name}, ${this._date(m.date, true)}${m.meal === 'night' ? ' night' : ''}`
+        return `
+          <div class="item">
+            <div><strong>${esc(label)}</strong>${m.out ? '<div class="state off">Away for this meal</div>' : ''}</div>
+            ${
+              m.out
+                ? `<button class="btn ghost" data-do="remove" data-id="${esc(m.out)}" ${this._busy ? 'disabled' : ''}>Home after all</button>`
+                : `<button class="btn" data-do="meal-out" data-id="${esc(m.date)}" data-to="${esc(m.meal)}" ${this._busy ? 'disabled' : ''}>Away for this meal</button>`
+            }
+          </div>`
+      })
+      .join('')
+
+    return `
+      <section class="card">
+        <h2>Away mode</h2>
+        ${state}
+      </section>
+      <section class="card">
+        <h2>${now ? 'Change away mode' : 'Turn away mode on'}</h2>
+        <label class="field">While away
+          <select data-away="run">
+            <option value="off" ${a.run === 'off' ? 'selected' : ''}>Everything off</option>
+            ${presets.map((p) => `<option value="${esc(p.id)}" ${a.run === p.id ? 'selected' : ''}>Run the "${esc(p.name)}" schedule</option>`).join('')}
+            <option value="rooms" ${a.run === 'rooms' ? 'selected' : ''}>Only some rooms run</option>
+          </select>
+        </label>
+        ${roomChecks}
+        <label class="field">Until
+          <select data-away="end">
+            ${data.motzei ? `<option value="motzei" ${a.end === 'motzei' ? 'selected' : ''}>Motzei Shabbos or Yom Tov (${esc(this._moment(data.motzei.ends_at))})</option>` : ''}
+            <option value="date" ${a.end === 'date' ? 'selected' : ''}>The end of a date</option>
+          </select>
+        </label>
+        ${a.end === 'date' ? `<label class="field">Last date away<input type="date" data-away="date" min="${esc(data.today)}" value="${esc(a.date)}"></label>` : ''}
+        <p class="muted">Away mode starts as soon as you turn it on.${a.end === 'motzei' ? ' It ends an hour after havdalah.' : ''}</p>
+        <div><button class="btn" data-do="start-away" ${canStart ? '' : 'disabled'}>Turn away mode on</button></div>
+      </section>
+      <section class="card">
+        <h2>Away for a meal</h2>
+        <p class="muted">The rooms set up for it run differently for that meal. These are the meals of the coming week.</p>
+        ${mealRows || '<p class="muted">No Shabbos or Yom Tov meals in the coming week.</p>'}
+      </section>`
+  }
+
   /** The Friday of this week: today if it is Friday, otherwise the next one. */
   _friday() {
     const today = this._data.today
@@ -570,6 +662,16 @@ class RytonClientView extends HTMLElement {
         const until = this._quick.simchaUntil && this._quick.simchaUntil >= from ? this._quick.simchaUntil : from
         return this._do(() => this._add({ kind: 'simcha' }, from, until), 'Simcha is on for those dates.')
       }
+      case 'start-away': {
+        const a = this._away
+        const data = { run: a.run, until: a.end === 'motzei' ? 'motzei' : a.date }
+        if (a.run === 'rooms') data.rooms = a.rooms || (this._data.rooms || []).map((r) => r.id)
+        return this._do(() => this._service('start_away', data), 'Away mode is on.')
+      }
+      case 'end-away':
+        return this._do(() => this._service('end_away', {}), 'Away mode has ended. The house is back on its schedule.')
+      case 'meal-out':
+        return this._do(() => this._add({ kind: 'meal_out', meal: target.dataset.to }, id, id), 'Saved for that meal.')
       case 'switch':
         return this._do(() => this._service('set_room_scheduling', { room: id, scheduling: target.dataset.to }))
       case 'until':
@@ -598,6 +700,18 @@ class RytonClientView extends HTMLElement {
     }
     if (el.dataset.until) {
       this._until[el.dataset.until] = el.value
+      return this._render()
+    }
+    if (el.dataset.away) {
+      this._away[el.dataset.away] = el.value
+      return this._render()
+    }
+    if (el.dataset.awayRoom) {
+      const all = (this._data.rooms || []).map((r) => r.id)
+      const ticked = new Set(this._away.rooms || all)
+      if (el.checked) ticked.add(el.dataset.awayRoom)
+      else ticked.delete(el.dataset.awayRoom)
+      this._away.rooms = all.filter((r) => ticked.has(r))
       return this._render()
     }
     if (el.dataset.day !== undefined) {

@@ -23,7 +23,20 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 from homeassistant.util import dt as dt_util
 
+from .calendar_reader import async_read_calendar
 from .const import DOMAIN, FORM_URL
+from .engine.away import (
+    OFF,
+    ROOMS,
+    away_changes,
+    meals_on,
+    mode_at,
+    motzei_end,
+    schedule_date,
+    schedule_presets,
+)
+from .engine.changes import AWAY, MEAL_OUT
+from .engine.preview import LOOK_AHEAD_DAYS, LOOK_BACK_DAYS
 from .engine.describe import automation_title, day_name, describe_by_room
 from .engine.scenes import schedule_scenes
 from .engine.time_resolver import ScheduleError
@@ -34,6 +47,112 @@ STATIC_URL = f"/{DOMAIN}_static"
 VIEW_PATH = "ryton-home-automations"
 FORM_PATH = "ryton-setup-form"
 DATA_VIEW = f"{DOMAIN}_view"
+
+
+# How many days of meals the client can be away for.
+MEAL_DAYS = 8
+
+
+def _ended(change: Any, now: Any) -> bool:
+    """Whether an away choice is over. It is kept a while, but no longer shown."""
+    if not isinstance(change, dict) or change.get("kind") != AWAY:
+        return False
+    try:
+        return dt_util.parse_datetime(change["ends_at"]) <= now
+    except (KeyError, TypeError, ValueError):
+        return True
+
+
+async def _async_away_and_meals(hass: HomeAssistant, scheduler: Any, now: Any, tz: Any) -> dict[str, Any]:
+    """Away mode as it stands now, what the client can choose, and the coming meals."""
+    schedule = scheduler.schedule
+    changes = list(scheduler.changes)
+    today = schedule_date(now, schedule, tz)
+    try:
+        presets = schedule_presets(schedule)
+    except ScheduleError:
+        presets = {}
+    try:
+        calendar = await async_read_calendar(
+            hass,
+            today - timedelta(days=LOOK_BACK_DAYS),
+            today + timedelta(days=LOOK_AHEAD_DAYS + MEAL_DAYS + 2),
+        )
+    except Exception:  # noqa: BLE001 - the view still shows the rest
+        _LOGGER.debug("The calendar could not be read for the client's view", exc_info=True)
+        calendar = None
+
+    def work() -> dict[str, Any]:
+        client = away_changes(schedule, changes)
+        try:
+            mode = mode_at(schedule, client, now, tz)
+        except ScheduleError:
+            mode = None
+        current = next(
+            (
+                change
+                for change in reversed(client)
+                if dt_util.parse_datetime(change["starts_at"])
+                <= now
+                < dt_util.parse_datetime(change["ends_at"])
+            ),
+            None,
+        )
+        away = None
+        if mode is not None:
+            preset = presets.get(mode.run) or {}
+            away = {
+                "run": mode.run,
+                "name": {OFF: "Everything off", ROOMS: "Only some rooms"}.get(
+                    mode.run, preset.get("name") or mode.run
+                ),
+                "rooms": sorted(mode.rooms),
+                # The client's own choice, or the dates set up for this house.
+                "by": "client" if current else "dates",
+                "id": current["id"] if current else None,
+                "ends_at": current["ends_at"] if current else None,
+            }
+        meals, motzei = [], None
+        if calendar is not None:
+            out = {
+                (change.get("from"), change.get("meal")): change.get("id")
+                for change in changes
+                if isinstance(change, dict) and change.get("kind") == MEAL_OUT
+            }
+            for n in range(MEAL_DAYS):
+                day = today + timedelta(days=n)
+                try:
+                    found = meals_on(schedule, day, calendar)
+                except Exception:  # noqa: BLE001 - one date must not hide the others
+                    continue
+                meals += [
+                    {
+                        "date": day.isoformat(),
+                        "meal": meal,
+                        "name": name,
+                        "out": out.get((day.isoformat(), meal)),
+                    }
+                    for meal, name in found
+                ]
+            try:
+                last, ends_at = motzei_end(schedule, today, calendar)
+                motzei = {
+                    "last": last.isoformat(),
+                    "ends_at": ends_at.astimezone(tz).isoformat(timespec="minutes"),
+                }
+            except Exception:  # noqa: BLE001 - then only "until a date" is offered
+                motzei = None
+        return {
+            "away": away,
+            "presets": [
+                {"id": preset_id, "name": preset.get("name") or preset_id}
+                for preset_id, preset in presets.items()
+            ],
+            "motzei": motzei,
+            "meals": meals,
+        }
+
+    return await hass.async_add_executor_job(work)
 
 
 async def async_view_data(hass: HomeAssistant, days: int) -> dict[str, Any]:
@@ -123,13 +242,14 @@ async def async_view_data(hass: HomeAssistant, days: int) -> dict[str, Any]:
         if isinstance(a, dict) and a.get("id")
     ]
     return {
+        **await _async_away_and_meals(hass, scheduler, now, tz),
         "ready": True,
         "today": today.isoformat(),
         "now": now.astimezone(tz).isoformat(timespec="minutes"),
         "days": shown,
         "rooms": rooms,
         "rooms_off": list(scheduler.rooms_off),
-        "changes": list(scheduler.changes),
+        "changes": [change for change in scheduler.changes if not _ended(change, now)],
         "has_simcha_time": bool((settings.get("simcha") or {}).get("night_time")),
         "rollover": settings.get("day_rollover", "04:00"),
         "automations_by_day": automations_by_day,

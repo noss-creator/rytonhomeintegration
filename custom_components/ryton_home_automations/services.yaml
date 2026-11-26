@@ -97,3 +97,21 @@ days_in_dates:
       required: true
       selector:
         date:
+
+start_away:
+  fields:
+    run:
+      required: true
+      selector:
+        text:
+    rooms:
+      required: false
+      selector:
+        area:
+          multiple: true
+    until:
+      required: true
+      selector:
+        text:
+
+end_away:

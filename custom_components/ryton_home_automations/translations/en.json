@@ -150,6 +150,28 @@
           "description": "The last date."
         }
       }
+    },
+    "start_away": {
+      "name": "Turn away mode on",
+      "description": "Turns away mode on from now. It runs nothing, a preset of the schedule, or only some rooms, until motzei Shabbos or Yom Tov or the end of a date.",
+      "fields": {
+        "run": {
+          "name": "What runs",
+          "description": "\"off\" for nothing, \"rooms\" for only the rooms listed, or the identifier of a preset."
+        },
+        "rooms": {
+          "name": "Rooms",
+          "description": "With \"rooms\": the rooms that keep running."
+        },
+        "until": {
+          "name": "Until",
+          "description": "\"motzei\" for an hour after havdalah at the end of the coming Shabbos or Yom Tov, or a date."
+        }
+      }
+    },
+    "end_away": {
+      "name": "End away mode",
+      "description": "Ends the client's away mode now. Each room goes to where the schedule has it."
     }
   }
 }

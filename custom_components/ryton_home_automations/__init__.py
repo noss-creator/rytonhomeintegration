@@ -32,6 +32,7 @@ from .engine.preview import (
 from .engine.changes import ChangeError, dates_between
 from .engine.day_list import build_day_list, resolve_schedule_day
 from .engine.run_through import automations_of_dates, every_automation
+from .engine.sync_logic import on_off_rooms
 from .engine.time_resolver import ScheduleError
 from .scheduler import ENGINE_ERRORS, Scheduler
 from .sync import Syncer
@@ -49,11 +50,20 @@ SERVICE_REMOVE_CHANGE = "remove_change"
 SERVICE_LIST_CHANGES = "list_changes"
 SERVICE_SET_ROOM_SCHEDULING = "set_room_scheduling"
 SERVICE_DAYS_IN_DATES = "days_in_dates"
+SERVICE_START_AWAY = "start_away"
+SERVICE_END_AWAY = "end_away"
 
 ADD_CHANGE_SCHEMA = vol.Schema({vol.Required("change"): dict})
 REMOVE_CHANGE_SCHEMA = vol.Schema({vol.Required("id"): cv.string})
 ROOM_SCHEDULING_SCHEMA = vol.Schema(
     {vol.Required("room"): cv.string, vol.Required("scheduling"): vol.In(["on", "off"])}
+)
+START_AWAY_SCHEMA = vol.Schema(
+    {
+        vol.Required("run"): cv.string,
+        vol.Optional("rooms", default=list): [cv.string],
+        vol.Required("until"): vol.Any("motzei", cv.date),
+    }
 )
 DAYS_IN_DATES_SCHEMA = vol.Schema(
     {vol.Required("from"): cv.date, vol.Required("until"): cv.date}
@@ -124,6 +134,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await scheduler.async_load()
     syncer = Syncer(hass, entry, scheduler)
     await syncer.async_load()
+    scheduler.house_rooms = lambda: on_off_rooms(syncer.inventory())
     # The schedule's own scenes are offered from the stored schedule.
     entry.runtime_data = scheduler
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -276,6 +287,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         return {"rooms_off": list(scheduler.rooms_off)}
 
+    async def handle_start_away(call: ServiceCall) -> ServiceResponse:
+        """Turn away mode on from now, until motzei Shabbos or Yom Tov or the end of a date."""
+        until = call.data["until"]
+        end = {"kind": "motzei"} if until == "motzei" else {"kind": "date", "date": until}
+        try:
+            made = await scheduler.async_start_away(call.data["run"], call.data["rooms"], end)
+        except ChangeError as err:
+            raise ServiceValidationError(f"Away mode was not turned on: {err}") from err
+        except ENGINE_ERRORS as err:
+            raise HomeAssistantError(f"Away mode was not turned on: {err}") from err
+        return {"change": made}
+
+    async def handle_end_away(call: ServiceCall) -> ServiceResponse:
+        """End the client's away mode now."""
+        return {"ended": await scheduler.async_end_away()}
+
     async def handle_days_in_dates(call: ServiceCall) -> ServiceResponse:
         """Say which of the schedule's days occur in a span of dates.
 
@@ -315,6 +342,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SupportsResponse.OPTIONAL,
         ),
         (SERVICE_DAYS_IN_DATES, handle_days_in_dates, DAYS_IN_DATES_SCHEMA, SupportsResponse.ONLY),
+        (SERVICE_START_AWAY, handle_start_away, START_AWAY_SCHEMA, SupportsResponse.OPTIONAL),
+        (SERVICE_END_AWAY, handle_end_away, None, SupportsResponse.OPTIONAL),
     ):
         hass.services.async_register(
             DOMAIN, name, handler, schema=schema, supports_response=response
@@ -391,6 +420,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         SERVICE_LIST_CHANGES,
         SERVICE_SET_ROOM_SCHEDULING,
         SERVICE_DAYS_IN_DATES,
+        SERVICE_START_AWAY,
+        SERVICE_END_AWAY,
     ):
         hass.services.async_remove(DOMAIN, name)
     return True

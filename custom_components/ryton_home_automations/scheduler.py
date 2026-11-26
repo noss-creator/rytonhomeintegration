@@ -40,8 +40,10 @@ from .engine.actions import (
 )
 from .engine.calendar_settings import wanted_settings
 from .engine.calendar_snapshot import CalendarDataError
+from .engine.away import OFF, ROOMS, motzei_end, rollover_at, schedule_date, schedule_presets
+from .engine.changes import AWAY
 from .engine.changes import FORMAT_VERSION as CHANGES_FORMAT_VERSION
-from .engine.changes import check_change, still_wanted
+from .engine.changes import ChangeError, check_change, still_wanted
 from .engine.day_list import (
     DayList,
     ScheduledAutomation,
@@ -112,6 +114,9 @@ class Scheduler:
         self._timers: list[CALLBACK_TYPE] = []
         self._rollover: CALLBACK_TYPE | None = None
         self._running = asyncio.Lock()
+        # Says which entities each room has that are switched on and off.
+        # It is what "everything off" switches off when away mode starts.
+        self.house_rooms: Callable[[], Mapping[str, Collection[str]]] | None = None
         self._run_through: asyncio.Task[None] | None = None
         self.problems: deque[dict[str, str]] = deque(maxlen=50)
         self._listeners: list[Callable[[], Awaitable[None]]] = []
@@ -190,6 +195,7 @@ class Scheduler:
         except (CalendarDataError, HomeAssistantError):
             return []
         schedule, changes, rooms_off = self.schedule, list(self.changes), list(self.rooms_off)
+        house_rooms = self._house_rooms()
 
         def build() -> list[DayList]:
             lists = []
@@ -198,7 +204,8 @@ class Scheduler:
                 try:
                     lists.append(
                         build_day_list(
-                            schedule, day, calendar, tz, changes=changes, rooms_off=rooms_off
+                            schedule, day, calendar, tz, changes=changes,
+                            rooms_off=rooms_off, house_rooms=house_rooms,
                         )
                     )
                 except ENGINE_ERRORS:
@@ -263,8 +270,136 @@ class Scheduler:
         await self._async_changes_made()
         return made
 
+    def _house_rooms(self) -> Mapping[str, Collection[str]]:
+        if self.house_rooms is None:
+            return {}
+        try:
+            return self.house_rooms()
+        except Exception:  # noqa: BLE001 - the lists must still be fixed
+            _LOGGER.exception("The house's rooms could not be read")
+            return {}
+
+    # --- away mode ----------------------------------------------------------
+
+    async def async_start_away(
+        self, run: str, rooms: Collection[str], end: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Turn away mode on from now, until the end asked for. Return the change stored.
+
+        ``run`` is ``off``, ``rooms`` or a preset of the schedule. ``end``
+        is ``{"kind": "motzei"}``, for an hour after havdalah at the end of
+        the coming Shabbos or Yom Tov, or ``{"kind": "date", "date": ...}``,
+        for the end of that date.
+        """
+        if self.schedule is None:
+            raise HomeAssistantError("There is no schedule yet")
+        if run not in (OFF, ROOMS) and run not in schedule_presets(self.schedule):
+            raise ChangeError(f"The schedule has no preset {run!r}")
+        tz = ZoneInfo(self.hass.config.time_zone)
+        now = dt_util.now().astimezone(tz)
+        today = schedule_date(now, self.schedule, tz)
+        if end.get("kind") == "motzei":
+            calendar = await async_read_calendar(
+                self.hass,
+                today - timedelta(days=LOOK_BACK_DAYS),
+                today + timedelta(days=LOOK_AHEAD_DAYS + 10),
+            )
+            last, ends_at = await self.hass.async_add_executor_job(
+                motzei_end, self.schedule, today, calendar
+            )
+            until = max(last, schedule_date(ends_at, self.schedule, tz))
+        elif end.get("kind") == "date":
+            until = end.get("date")
+            if not isinstance(until, date):
+                raise ChangeError("Away mode until a date needs the date")
+            ends_at = rollover_at(until + timedelta(days=1), self.schedule, tz)
+        else:
+            raise ChangeError("Away mode ends at motzei Shabbos or Yom Tov, or on a date")
+        if ends_at <= now:
+            raise ChangeError("Away mode would end before it starts")
+
+        # One away choice of the client's at a time: this one takes over.
+        self._end_client_away(now)
+        change: dict[str, Any] = {
+            "from": today.isoformat(),
+            "until": until.isoformat(),
+            "days": "all",
+            "kind": AWAY,
+            "run": run,
+            # To the microsecond, so it is always later than the last automation run
+            # and the switch to away mode is never taken as already done.
+            "starts_at": now.isoformat(),
+            "ends_at": ends_at.astimezone(tz).isoformat(timespec="seconds"),
+        }
+        if run == ROOMS:
+            change["rooms"] = sorted(set(rooms))
+        return await self.async_add_change(change)
+
+    def _end_client_away(self, now: datetime) -> int:
+        """End, as of ``now``, every away choice of the client's still to end. Return how many."""
+        if self.schedule is None:
+            return 0
+        tz = ZoneInfo(self.hass.config.time_zone)
+        kept, ended = [], 0
+        for change in self.changes:
+            try:
+                running = (
+                    change.get("kind") == AWAY
+                    and datetime.fromisoformat(change["ends_at"]) > now
+                )
+                started = running and datetime.fromisoformat(change["starts_at"]) <= now
+            except (KeyError, TypeError, ValueError):
+                kept.append(change)
+                continue
+            if not running:
+                kept.append(change)
+                continue
+            ended += 1
+            if started:
+                # Kept, with its end moved to now, so the house still knows
+                # to go back to where its schedule has it.
+                kept.append(
+                    {
+                        **change,
+                        "ends_at": now.astimezone(tz).isoformat(),
+                        "until": max(
+                            schedule_date(now, self.schedule, tz).isoformat(), change["from"]
+                        ),
+                    }
+                )
+        self.changes = kept
+        return ended
+
+    async def async_end_away(self) -> int:
+        """End the client's away mode now. Return how many choices were ended."""
+        ended = self._end_client_away(dt_util.now())
+        if ended:
+            await self._async_save_changes()
+            await self._async_changes_made()
+        return ended
+
     async def async_remove_change(self, change_id: str) -> bool:
-        """Remove a temporary change. Return whether there was one."""
+        """Remove a temporary change. Return whether there was one.
+
+        Removing an away choice that has started ends it now instead, so the
+        house goes back to where its schedule has it.
+        """
+        found = next((c for c in self.changes if c.get("id") == change_id), None)
+        if found is not None and found.get("kind") == AWAY:
+            now = dt_util.now()
+            try:
+                started = datetime.fromisoformat(found["starts_at"]) <= now
+                running = datetime.fromisoformat(found["ends_at"]) > now
+            except (KeyError, TypeError, ValueError):
+                started = running = False
+            if started and running:
+                others = [c for c in self.changes if c.get("id") != change_id]
+                self.changes = [found]
+                self._end_client_away(now)
+                self.changes = [*others, *self.changes]
+                await self._async_save_changes()
+                await self._async_changes_made()
+                return True
         kept = [change for change in self.changes if change.get("id") != change_id]
         if len(kept) == len(self.changes):
             return False
@@ -375,6 +510,7 @@ class Scheduler:
             self.changes = wanted
             await self._async_save_changes()
 
+        house_rooms = self._house_rooms()
         for day in (yesterday, today):
             try:
                 day_list = build_day_list(
@@ -384,6 +520,7 @@ class Scheduler:
                     tz,
                     changes=self.changes,
                     rooms_off=self.rooms_off,
+                    house_rooms=house_rooms,
                 )
             except ENGINE_ERRORS as err:
                 self.report(f"The list for {day} could not be fixed: {err}")
@@ -407,6 +544,7 @@ class Scheduler:
                 tz,
                 changes=self.changes,
                 rooms_off=self.rooms_off,
+                house_rooms=house_rooms,
             )
         except ENGINE_ERRORS:
             # Reported when its own day comes.
@@ -460,6 +598,7 @@ class Scheduler:
                 automation.name,
                 fade_seconds=automation.fade_seconds,
                 rooms_off=rooms_off,
+                merged=automation.merged,
             )
             if key:
                 self._ran.add(key)

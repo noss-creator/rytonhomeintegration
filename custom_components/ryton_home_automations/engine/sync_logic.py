@@ -45,6 +45,30 @@ def accept_schedule(
     return dict(fetched)
 
 
+# Kinds of entity that are simply switched on and off.
+ON_OFF_DOMAINS = ("light", "switch", "input_boolean", "fan")
+
+
+def on_off_rooms(inventory: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Each room of the house with its entities that are switched on and off.
+
+    This is what "everything off" switches off when away mode starts.
+    """
+    rooms = [
+        room
+        for floor in [*inventory.get("floors", []), {"rooms": inventory.get("rooms_with_no_floor", [])}]
+        for room in floor.get("rooms", [])
+    ]
+    return {
+        room["id"]: [
+            entity["entity_id"]
+            for entity in room.get("entities", [])
+            if entity["entity_id"].split(".", 1)[0] in ON_OFF_DOMAINS
+        ]
+        for room in rooms
+    }
+
+
 def fingerprint(value: Any) -> str:
     """A short, stable mark of a value, to tell whether it changed."""
     text = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
