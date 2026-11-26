@@ -265,6 +265,11 @@ async def async_view_data(hass: HomeAssistant, days: int) -> dict[str, Any]:
                 "night_usual": day_list.night_usual.astimezone(tz).isoformat(timespec="minutes")
                 if day_list.night_usual
                 else None,
+                # The rooms the schedule gives a Night time of their own.
+                "night_rooms": {
+                    room: when.astimezone(tz).isoformat(timespec="minutes")
+                    for room, when in day_list.night_rooms.items()
+                },
                 "automations": automations,
             }
         )

@@ -682,11 +682,15 @@ class RytonClientView extends HTMLElement {
     return this._child[roomId]
   }
 
-  /** Tonight's usual Night of the house, as HH:MM, where the house has one. */
-  _nightTonight() {
+  /**
+   * Tonight's usual Night of the house, as HH:MM, where the house has one,
+   * and the time the schedule gives the room tonight, where it gives one.
+   */
+  _nightTonight(roomId) {
     const days = this._data.days || []
     const day = days.find((d) => d.date === this._data.today && d.night_usual) || days.find((d) => d.night_usual)
-    return day ? day.night_usual.slice(11, 16) : ''
+    const own = day && day.night_rooms ? day.night_rooms[roomId] : ''
+    return { night: day ? day.night_usual.slice(11, 16) : '', own: own ? own.slice(11, 16) : '' }
   }
 
   _childCard(room) {
@@ -694,7 +698,13 @@ class RytonClientView extends HTMLElement {
     const saved = (this._data.room_night || {})[room.id]
     const adult = d.kind === 'adult'
     const word = adult ? 'later' : 'earlier'
-    const night = this._nightTonight()
+    // Hours and minutes are counted from the room's own time, where the schedule gives it one.
+    const { night, own } = this._nightTonight(room.id)
+    const from = own || night
+    const tonight = own
+      ? `Tonight this room's Night is set for ${own} (the house's is at ${night})`
+      : `Tonight the house's Night is at ${night}`
+    const whose = own ? "this room's usual Night" : "the house's Night"
     const rollover = String(this._data.rollover || '04:00').slice(0, 5)
     const apart = Number(d.hours) * 60 + Number(d.minutes)
     const mins = (clock) => {
@@ -703,16 +713,16 @@ class RytonClientView extends HTMLElement {
     }
     let computed = ''
     if (night && apart > 0) {
-      const at = (((mins(night) + (adult ? apart : -apart)) % 1440) + 1440) % 1440
+      const at = (((mins(from) + (adult ? apart : -apart)) % 1440) + 1440) % 1440
       const clock = `${String(Math.floor(at / 60)).padStart(2, '0')}:${String(at % 60).padStart(2, '0')}`
       // How long after Night the house's day starts over; an adult's Night has to be before that.
-      const room_left = (((mins(rollover) - mins(night)) % 1440) + 1440) % 1440
+      const room_left = (((mins(rollover) - mins(from)) % 1440) + 1440) % 1440
       computed =
         adult && apart >= room_left
-          ? `Tonight the house's Night is at ${night}, and this would be at ${clock}, which is not before the house's day starts over at ${rollover}. On such a night the room runs with the house.`
-          : `Tonight the house's Night is at ${night}, so this room's Night is at <strong>${clock}</strong>.`
+          ? `${tonight}, and this would be at ${clock}, which is not before the house's day starts over at ${rollover}. On such a night the room keeps its usual time.`
+          : `${tonight}, so with this it is at <strong>${clock}</strong>.`
     } else if (night) {
-      computed = `Tonight the house's Night is at ${night}.`
+      computed = `${tonight}.`
     }
     const valid = d.mode === 'from' ? apart >= 1 && apart <= 720 : Boolean(d.at)
     const same =
@@ -726,13 +736,13 @@ class RytonClientView extends HTMLElement {
         <label class="check"><input type="checkbox" data-child="kind" data-id="${esc(room.id)}" value="child" ${d.kind === 'child' ? 'checked' : ''} ${off}> Child night mode: this room has its Night earlier than the house</label>
         <label class="check"><input type="checkbox" data-child="kind" data-id="${esc(room.id)}" value="adult" ${adult ? 'checked' : ''} ${off}> Adult night mode: this room has its Night later than the house</label>
         <fieldset ${d.kind ? '' : 'disabled'}>
-          <label class="check"><input type="radio" name="child-mode" data-child="mode" data-id="${esc(room.id)}" value="from" ${d.mode === 'from' ? 'checked' : ''}> ${adult ? 'Later' : 'Earlier'} than the house's Night</label>
+          <label class="check"><input type="radio" name="child-mode" data-child="mode" data-id="${esc(room.id)}" value="from" ${d.mode === 'from' ? 'checked' : ''}> ${adult ? 'Later' : 'Earlier'} than ${whose}</label>
           <div class="indent">
             <div class="row">
               <input type="number" min="0" max="12" data-child="hours" data-id="${esc(room.id)}" value="${esc(d.hours)}" aria-label="Hours ${word}" ${d.mode === 'from' ? '' : 'disabled'}> hours
               <input type="number" min="0" max="59" data-child="minutes" data-id="${esc(room.id)}" value="${esc(d.minutes)}" aria-label="Minutes ${word}" ${d.mode === 'from' ? '' : 'disabled'}> minutes ${word}
             </div>
-            <p class="muted">${computed} It moves with the house's Night, so it can differ on Shabbos and Yom Tov.</p>
+            <p class="muted">${computed} It moves with ${whose}, so it can differ on Shabbos and Yom Tov.</p>
           </div>
           <label class="check"><input type="radio" name="child-mode" data-child="mode" data-id="${esc(room.id)}" value="clock" ${d.mode === 'clock' ? 'checked' : ''}> At a clock time</label>
           <div class="indent">

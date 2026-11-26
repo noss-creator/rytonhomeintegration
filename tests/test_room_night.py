@@ -13,10 +13,10 @@ import pytest
 
 from engine.away import meals_on
 from engine.changes import check_change
-from engine.day_list import check_room_night
+from engine.day_list import check_room_night, check_room_time
 from engine.time_resolver import ScheduleError
 
-from .test_day_list import SOURCE, TUESDAY, at, build, make_schedule
+from .test_day_list import FRIDAY, SOURCE, TUESDAY, at, build, make_schedule
 
 NIGHT_BODY = {"scene": "scene.weekday"}
 
@@ -184,6 +184,117 @@ def test_a_child_and_an_adult_in_two_rooms():
         ("night", at(TUESDAY, "23:00"), []),
         ("night#own:study", at(WEDNESDAY, "00:00"), ["study"]),
     ]
+
+
+# --- a Night time the schedule gives a room -------------------------------------
+
+
+def timed(room_time, room_night=None, **more):
+    """The pretend house with the hall's Night at its own time on a weekday."""
+    schedule = make_schedule()
+    night = next(a for a in schedule["days"]["weekday"]["automations"] if a["id"] == "night")
+    night["room_times"] = {"hall": room_time}
+    return build(schedule, TUESDAY, room_night={"hall": room_night} if room_night else None, **more)
+
+
+def test_the_schedule_can_put_a_rooms_night_earlier():
+    got = timed({"minutes": -120})
+    assert rooms_at(got) == [
+        ("morning", at(TUESDAY, "07:00"), ["hall"]),
+        ("sunset", at(TUESDAY, "18:00"), ["hall"]),
+        ("night#own:hall", at(TUESDAY, "21:00"), ["hall"]),
+        ("night", at(TUESDAY, "23:00"), []),
+    ]
+    assert got.night_rooms == {"hall": at(TUESDAY, "21:00")}
+    assert next(a for a in got.automations if a.id == "night#own:hall").name == "Night, the room's own time"
+
+
+def test_an_earlier_night_from_the_schedule_makes_automations_in_between_skip_the_room():
+    assert rooms_at(timed({"at": "17:30"}))[1:3] == [
+        ("night#own:hall", at(TUESDAY, "17:30"), ["hall"]),
+        ("sunset", at(TUESDAY, "18:00"), []),
+    ]
+
+
+def test_the_schedule_can_put_a_rooms_night_later():
+    assert rooms_at(timed({"minutes": 45}))[-2:] == [
+        ("night", at(TUESDAY, "23:00"), []),
+        ("night#own:hall", at(TUESDAY, "23:45"), ["hall"]),
+    ]
+    assert rooms_at(timed({"at": "00:30"}))[-1] == ("night#own:hall", at(WEDNESDAY, "00:30"), ["hall"])
+
+
+def test_child_and_adult_mode_are_counted_from_the_rooms_own_time():
+    child_from_earlier = timed({"minutes": -120}, {"mode": "child", "minutes": 30})
+    assert ("night#own:hall", at(TUESDAY, "20:30"), ["hall"]) in rooms_at(child_from_earlier)
+    assert child_from_earlier.night_rooms == {"hall": at(TUESDAY, "21:00")}
+    own = next(a for a in child_from_earlier.automations if a.id == "night#own:hall")
+    assert own.name == "Night, child's room"
+
+    adult_from_earlier = timed({"minutes": -120}, {"mode": "adult", "minutes": 30})
+    assert ("night#own:hall", at(TUESDAY, "21:30"), ["hall"]) in rooms_at(adult_from_earlier)
+
+    adult_from_later = timed({"minutes": 45}, {"mode": "adult", "minutes": 30})
+    assert rooms_at(adult_from_later)[-1] == ("night#own:hall", at(WEDNESDAY, "00:15"), ["hall"])
+
+    # An adult's two and a half hours from 21:00 lands after the house's Night.
+    crossing = timed({"minutes": -120}, {"mode": "adult", "minutes": 150})
+    assert rooms_at(crossing)[-2:] == [
+        ("night", at(TUESDAY, "23:00"), []),
+        ("night#own:hall", at(TUESDAY, "23:30"), ["hall"]),
+    ]
+
+
+def test_the_clients_clock_time_wins_over_the_schedules_time():
+    got = timed({"minutes": -120}, {"mode": "child", "at": "19:00"})
+    assert ("night#own:hall", at(TUESDAY, "19:00"), ["hall"]) in rooms_at(got)
+
+
+def test_a_clients_time_that_does_not_fit_leaves_the_schedules_time():
+    # A child's clock time after Night is not a child's: the room keeps the schedule's time.
+    assert rooms_at(timed({"minutes": -120}, {"mode": "child", "at": "23:30"})) == rooms_at(
+        timed({"minutes": -120})
+    )
+    # Landing exactly on the house's Night does not fit either.
+    assert rooms_at(timed({"minutes": -120}, {"mode": "adult", "minutes": 120})) == rooms_at(
+        timed({"minutes": -120})
+    )
+
+
+@pytest.mark.parametrize(
+    "room_time",
+    [{"minutes": 0}, {"minutes": 300}, {"minutes": -1000}, {"at": "23:00"}, {"at": "nine"}, {"minutes": 5, "at": "21:00"}, "early", None],
+)
+def test_a_schedules_room_time_that_does_not_fit_changes_nothing(room_time):
+    got = timed(room_time)
+    assert rooms_at(got) == rooms_at(build(make_schedule(), TUESDAY))
+    assert got.night_rooms == {}
+
+
+def test_a_room_time_on_one_day_is_not_on_another():
+    schedule = make_schedule()
+    night = next(a for a in schedule["days"]["weekday"]["automations"] if a["id"] == "night")
+    night["room_times"] = {"hall": {"minutes": -60}}
+    assert not any(a.id.startswith("night#own:") for a in build(schedule, FRIDAY).automations)
+
+
+def test_on_a_simcha_night_the_schedules_later_time_must_be_after_the_later_night():
+    assert rooms_at(timed({"minutes": 45}, simcha=True)) == rooms_at(
+        build(make_schedule(), TUESDAY, simcha=True)
+    )
+    assert rooms_at(timed({"minutes": -60}, simcha=True))[-2:] == [
+        ("night#own:hall", at(TUESDAY, "22:00"), ["hall"]),
+        ("night", at(WEDNESDAY, "01:00"), []),
+    ]
+
+
+def test_a_room_time_is_checked():
+    check_room_time({"minutes": -90})
+    check_room_time({"minutes": 30})
+    check_room_time({"at": "21:15"})
+    for bad in ({}, {"minutes": 0}, {"minutes": 721}, {"minutes": 1.5}, {"at": "9pm"}, {"at": 9}, {"mode": "child", "minutes": 5}):
+        with pytest.raises(ScheduleError):
+            check_room_time(bad)
 
 
 # --- meals with an automation of their own -------------------------------------
