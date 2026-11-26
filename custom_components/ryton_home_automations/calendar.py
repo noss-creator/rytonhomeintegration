@@ -56,7 +56,7 @@ def as_event(hass: HomeAssistant, scheduler: Scheduler, day_list: DayList, autom
         end=automation.time + EVENT_LENGTH,
         summary=automation.name,
         description=describe(hass, scheduler, day_list, automation),
-        uid=f"{day_list.date.isoformat()}|{automation.id}",
+        uid=f"{day_list.date.isoformat()}|{automation.key}",
     )
 
 

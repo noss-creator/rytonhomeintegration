@@ -174,7 +174,7 @@ class Scheduler:
             for day_list in lists
             for automation in day_list.automations
             if automation.time > now
-            and f"{day_list.date.isoformat()}|{automation.id}" not in self._ran
+            and f"{day_list.date.isoformat()}|{automation.key}" not in self._ran
         ]
         return min(found, key=lambda pair: pair[1].time) if found else None
 
@@ -428,7 +428,7 @@ class Scheduler:
             for day_list in self.day_lists:
                 for automation in day_list.moments:
                     if automation.time <= self.last_run:
-                        self._ran.add(f"{day_list.date.isoformat()}|{automation.id}")
+                        self._ran.add(f"{day_list.date.isoformat()}|{automation.key}")
         await self.async_rebuild(recover=True)
 
     # --- taking a schedule ------------------------------------------------
@@ -528,7 +528,7 @@ class Scheduler:
             self.day_lists.append(day_list)
             for automation in day_list.moments:
                 self._of[id(automation)] = (
-                    f"{day.isoformat()}|{automation.id}",
+                    f"{day.isoformat()}|{automation.key}",
                     day_list.rooms_off,
                 )
             for change_id, reason in day_list.skipped_changes:

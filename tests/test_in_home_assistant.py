@@ -155,8 +155,9 @@ async def test_reader_asks_for_both_calendars_and_enough_days_around(house):
     start = datetime.fromisoformat(request["start_date_time"])
     end = datetime.fromisoformat(request["end_date_time"])
     assert start.utcoffset() is not None and end.utcoffset() is not None
-    # Eight days before the first date, for the first evening of Chanukah.
-    assert start.date() == date(2027, 6, 6)
+    # Nine days before the first date: eight for the first evening of
+    # Chanukah, and one more for the day before, which away mode reads.
+    assert start.date() == date(2027, 6, 5)
     # Ten days after the last date for Rosh Hashana, and two more so the last
     # date's all-day event is returned.
     assert end.date() == date(2027, 7, 2)

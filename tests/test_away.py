@@ -459,3 +459,13 @@ def test_a_meal_change_is_checked():
         check_change(meal_out(FRIDAY, "kiddush"))
     with pytest.raises(ChangeError):
         check_change({**meal_out(FRIDAY, "night"), "until": "2027-06-19"})
+
+
+def test_a_presets_automation_is_told_from_the_regular_one_of_the_same_name():
+    # Away mode starts at 08:00: the regular Morning ran at 07:00, and the
+    # preset's Morning, at 09:00, must still count as one that has not run.
+    start = at(TUESDAY, "08:00")
+    change = away("summer", start, at(TUESDAY + timedelta(days=2), "04:00"))
+    got = build(with_summer(), TUESDAY, changes=[change])
+    mornings = [(a.time, a.key) for a in got.automations if a.id == "morning"]
+    assert mornings == [(at(TUESDAY, "07:00"), "morning"), (at(TUESDAY, "09:00"), "summer:morning")]

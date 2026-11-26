@@ -75,6 +75,18 @@ class ScheduledAutomation:
     # Its rooms may hold a scene and entities together, and nothing fades:
     # it brings rooms straight to a state, as when away mode starts or ends.
     merged: bool = False
+    # The away preset it belongs to, where it is not the regular schedule's.
+    preset: str | None = None
+
+    @property
+    def key(self) -> str:
+        """What tells it from every other moment of its date.
+
+        A preset's automation may share its identifier with one of the
+        regular schedule's, and both can be in one date's list when away
+        mode starts or ends during the day.
+        """
+        return f"{self.preset}:{self.id}" if self.preset else self.id
 
 
 @dataclass(frozen=True)
@@ -285,6 +297,10 @@ def build_day_list(
         rooms = {room: body for room, body in automation.rooms.items() if room in now.rooms}
         return replace(automation, rooms=rooms)
 
+    def of_preset(automation: ScheduledAutomation, preset_id: str) -> ScheduledAutomation | None:
+        found = kept(automation, Mode(preset_id))
+        return None if found is None else replace(found, preset=preset_id)
+
     switches = switch_moments(schedule, client, day, tz)
     preset_ids = {
         found.run
@@ -297,7 +313,7 @@ def build_day_list(
         listed = base(preset_id, day)
         if listed is not None:
             automations += [
-                a for a in (kept(a, Mode(preset_id)) for a in listed.automations) if a is not None
+                a for a in (of_preset(a, preset_id) for a in listed.automations) if a is not None
             ]
     automations.sort(key=lambda a: a.time)
 
@@ -305,7 +321,9 @@ def build_day_list(
     for automation in automations:
         running = mode(automation.time)
         cycle_steps += [
-            step for step in _cycle_steps(automation) if mode(step.time) == running
+            replace(step, preset=automation.preset)
+            for step in _cycle_steps(automation)
+            if mode(step.time) == running
         ]
 
     def state_at(preset_id: str | None, moment: datetime) -> dict[str, Any]:
