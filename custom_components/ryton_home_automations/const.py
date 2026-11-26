@@ -12,6 +12,10 @@ DEFAULT_SCHEDULE_FILE = "ryton_schedule.json"
 WEBSITE_URL = "https://qdaslreocgcfnpdcthdu.supabase.co"
 WEBSITE_PUBLISHABLE_KEY = "sb_publishable_67DMd_cFyWxFEoe9tvtneA_UxGIEGlB"
 
+# The setup form on the website. Only an administrator's sidebar entry opens
+# it, and only the one allowed account can log in there.
+FORM_URL = "https://rytonhomeautomations.vercel.app"
+
 # What the house keeps from pairing, in its config entry.
 CONF_HOUSE_ID = "house_id"
 CONF_HOUSE_NAME = "house_name"

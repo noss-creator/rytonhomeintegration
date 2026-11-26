@@ -145,6 +145,10 @@ class Syncer:
 
     # --- what the house sends up ------------------------------------------
 
+    def inventory(self) -> dict[str, Any]:
+        """The house's floors, rooms and entities, as sent to the website."""
+        return self._inventory()
+
     def _inventory(self) -> dict[str, Any]:
         floors = [
             {"id": floor.floor_id, "name": floor.name, "level": floor.level}

@@ -22,7 +22,20 @@ def describe_rooms(
     is shown by the scene's name. Rooms whose scheduling is off, and rooms
     in which nothing is set, are left out.
     """
-    lines: list[str] = []
+    return [
+        f"{room_name(room)}: {words}"
+        for room, words in describe_by_room(rooms, scenes, entity_name, rooms_off)
+    ]
+
+
+def describe_by_room(
+    rooms: Mapping[str, Any],
+    scenes: Mapping[str, Mapping[str, Any]],
+    entity_name: Callable[[str], str],
+    rooms_off: Collection[str] = (),
+) -> list[tuple[str, str]]:
+    """Return what an automation changes as (room, words), one for each room."""
+    found: list[tuple[str, str]] = []
     for room, body in expand_scenes(rooms, scenes).items():
         if room in rooms_off or not isinstance(body, Mapping):
             continue
@@ -34,5 +47,34 @@ def describe_rooms(
             if isinstance(action, Mapping):
                 parts.append(f"{entity_name(entity_id)} {describe_action(action).lower()}")
         if parts:
-            lines.append(f"{room_name(room)}: {', '.join(parts)}")
-    return lines
+            found.append((room, ", ".join(parts)))
+    return found
+
+
+_DAY_ENDINGS = (
+    ("__friday", " on Friday"),
+    ("__shabbos", " on Shabbos"),
+)
+_DAY_NUMBERS = (("_1", ", first day"), ("_2", ", second day"))
+
+
+def day_name(day_id: str) -> str:
+    """A day's identifier in words, as "Succos, first day on Shabbos"."""
+    ending = ""
+    for suffix, words in _DAY_ENDINGS:
+        if day_id.endswith(suffix):
+            day_id, ending = day_id[: -len(suffix)], words
+    number = ""
+    for suffix, words in _DAY_NUMBERS:
+        if day_id.endswith(suffix):
+            day_id, number = day_id[: -len(suffix)], words
+    words = day_id.replace("_", " ").strip()
+    return f"{words[:1].upper()}{words[1:]}{number}{ending}"
+
+
+def automation_title(automation_id: str, name: str | None) -> str:
+    """An automation's name, or its identifier in words where it has none."""
+    if name and name != automation_id:
+        return name
+    words = automation_id.replace("_", " ").strip()
+    return f"{words[:1].upper()}{words[1:]}"

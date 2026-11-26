@@ -51,3 +51,22 @@ def test_rooms_switched_off_and_rooms_with_nothing_set_are_left_out():
     }
     assert lines(rooms) == ["Den: Den lamp on"]
     assert lines(rooms, rooms_off={"den"}) == []
+
+
+def test_a_days_identifier_in_words():
+    from engine.describe import day_name
+
+    assert day_name("weekday") == "Weekday"
+    assert day_name("shabbos_hagadol") == "Shabbos hagadol"
+    assert day_name("succos_1") == "Succos, first day"
+    assert day_name("succos_1__shabbos") == "Succos, first day on Shabbos"
+    assert day_name("erev_pesach__friday") == "Erev pesach on Friday"
+    assert day_name("rosh_hashana_2__friday") == "Rosh hashana, second day on Friday"
+
+
+def test_an_automation_with_no_name_of_its_own_is_named_from_its_identifier():
+    from engine.describe import automation_title
+
+    assert automation_title("after_day_seuda", None) == "After day seuda"
+    assert automation_title("after_day_seuda", "after_day_seuda") == "After day seuda"
+    assert automation_title("x1", "Guests leave") == "Guests leave"

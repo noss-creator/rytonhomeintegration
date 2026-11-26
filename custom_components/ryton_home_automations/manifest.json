@@ -2,7 +2,10 @@
   "domain": "ryton_home_automations",
   "name": "Ryton Home Automations",
   "after_dependencies": [
-    "jewish_calendar"
+    "frontend",
+    "http",
+    "jewish_calendar",
+    "panel_custom"
   ],
   "codeowners": [],
   "config_flow": true,
