@@ -434,6 +434,33 @@ class RytonClientView extends HTMLElement {
   _quickTab() {
     const q = this._quick
     const friday = this._friday()
+    const sh = this._data.shabbos && this._data.shabbos.date === friday ? this._data.shabbos : null
+    const clock = (iso) => (iso ? iso.slice(11, 16) : '?')
+    const mine = (this._data.changes || []).some((c) => c.kind === 'shabbos' && c.from <= friday && friday <= c.until)
+    const early = Boolean(sh && sh.early)
+    const facts = sh
+      ? `<p>Shkia this Friday is at <strong>${esc(clock(sh.shkia))}</strong>. Candle lighting is at ${esc(clock(sh.candle_lighting))}.</p>
+         <p>${early ? `By this house's settings, Shabbos is <strong>early</strong> this week, starting at ${esc(clock(sh.start))}.` : `By this house's settings, Shabbos starts at <strong>candle lighting</strong> this week.`}</p>`
+      : ''
+    let choice
+    if (mine) {
+      choice = '<p class="muted">You have changed this week. Remove the change above to go back to the settings of the house.</p>'
+    } else if (early) {
+      choice = `
+        <div class="row between">
+          <span><strong>Late Shabbos</strong><br><span class="muted">Shabbos starts at candle lighting this week.</span></span>
+          <button class="btn" data-do="late" ${this._busy ? 'disabled' : ''}>Late this week</button>
+        </div>`
+    } else {
+      choice = `
+        <div class="row between">
+          <span><strong>Early Shabbos</strong><br><span class="muted">Shabbos starts at the time you enter. It is never later than candle lighting.</span></span>
+          <span class="row">
+            <input type="time" data-quick="early" value="${esc(q.early)}" aria-label="Early Shabbos start time">
+            <button class="btn" data-do="early" ${q.early && !this._busy ? '' : 'disabled'}>Early this week</button>
+          </span>
+        </div>`
+    }
     return `
       <section class="card">
         <h2>In place now</h2>
@@ -441,18 +468,9 @@ class RytonClientView extends HTMLElement {
       </section>
       <section class="card">
         <h2>This Shabbos, ${esc(this._date(friday))}</h2>
-        <p class="muted">Each of these is for this week only.</p>
-        <div class="row between">
-          <span><strong>Late Shabbos</strong><br><span class="muted">Shabbos starts at candle lighting, even where it is usually early.</span></span>
-          <button class="btn" data-do="late" ${this._busy ? 'disabled' : ''}>Late this week</button>
-        </div>
-        <div class="row between">
-          <span><strong>Early Shabbos</strong><br><span class="muted">Shabbos starts at the time you enter. It is never later than candle lighting.</span></span>
-          <span class="row">
-            <input type="time" data-quick="early" value="${esc(q.early)}" aria-label="Early Shabbos start time">
-            <button class="btn" data-do="early" ${q.early && !this._busy ? '' : 'disabled'}>Early this week</button>
-          </span>
-        </div>
+        ${facts}
+        ${choice}
+        <p class="muted">The change is for this week only.</p>
       </section>
       <section class="card">
         <h2>Simcha</h2>

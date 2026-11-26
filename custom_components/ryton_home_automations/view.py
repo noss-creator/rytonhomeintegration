@@ -36,6 +36,7 @@ from .engine.away import (
     schedule_presets,
 )
 from .engine.changes import AWAY, MEAL_OUT
+from .engine.day_list import build_day_list
 from .engine.preview import LOOK_AHEAD_DAYS, LOOK_BACK_DAYS
 from .engine.describe import automation_title, day_name, describe_by_entity, describe_by_room
 from .engine.scenes import schedule_scenes
@@ -142,7 +143,31 @@ async def _async_away_and_meals(hass: HomeAssistant, scheduler: Any, now: Any, t
                 }
             except Exception:  # noqa: BLE001 - then only "until a date" is offered
                 motzei = None
+        # This week's Friday as the house's own settings have it, before
+        # any one-week change of the client's.
+        shabbos = None
+        if calendar is not None:
+            friday = today + timedelta(days=(4 - today.weekday()) % 7)
+            try:
+                usual = build_day_list(schedule, friday, calendar, tz, away=False)
+                candle_lighting = calendar.zman(friday, "candle_lighting")
+                shkia = calendar.zman(friday, "shkia")
+
+                def clock(moment: Any) -> str | None:
+                    return moment.astimezone(tz).isoformat(timespec="minutes") if moment else None
+
+                if candle_lighting is not None and usual.shabbos_start is not None:
+                    shabbos = {
+                        "date": friday.isoformat(),
+                        "shkia": clock(shkia),
+                        "candle_lighting": clock(candle_lighting),
+                        "start": clock(usual.shabbos_start),
+                        "early": usual.shabbos_start < candle_lighting,
+                    }
+            except Exception:  # noqa: BLE001 - the view still shows the rest
+                shabbos = None
         return {
+            "shabbos": shabbos,
             "away": away,
             "presets": [
                 {"id": preset_id, "name": preset.get("name") or preset_id}

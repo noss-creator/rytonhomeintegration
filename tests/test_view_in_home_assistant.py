@@ -153,3 +153,47 @@ async def test_the_screen_reads_the_view_over_the_websocket(house, hass_ws_clien
     assert answer["success"] is True
     assert answer["result"]["ready"] is True
     assert len(answer["result"]["days"]) == 3
+
+
+async def test_the_view_says_whether_this_friday_is_early_by_the_houses_settings(house):
+    friday = START + timedelta(days=4)
+    await house.reload_schedule()
+    data = await async_view_data(house.hass, 1)
+    assert data["shabbos"] == {
+        "date": friday.isoformat(),
+        "shkia": _minutes(local(friday, "18:00")),
+        "candle_lighting": _minutes(local(friday, "17:42")),
+        "start": _minutes(local(friday, "17:42")),
+        "early": False,
+    }
+
+    schedule = make_schedule()
+    schedule["settings"]["early_shabbos_rules"] = [
+        {
+            "when": {"kind": "zman_range", "zman": "shkia", "from": "17:00"},
+            "start": {"kind": "zman", "zman": "plag"},
+        }
+    ]
+    house.write_schedule(schedule)
+    await house.reload_schedule()
+    data = await async_view_data(house.hass, 1)
+    assert data["shabbos"]["early"] is True
+    assert data["shabbos"]["start"] == _minutes(local(friday, "16:45"))
+
+    # The client's own change for the week does not alter what the settings say.
+    await house.hass.services.async_call(
+        DOMAIN,
+        "add_change",
+        {
+            "change": {
+                "from": friday.isoformat(),
+                "until": friday.isoformat(),
+                "days": "all",
+                "kind": "shabbos",
+                "week": "late",
+            }
+        },
+        blocking=True,
+    )
+    data = await async_view_data(house.hass, 1)
+    assert data["shabbos"]["early"] is True
