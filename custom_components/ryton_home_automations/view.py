@@ -186,6 +186,13 @@ async def _async_away_and_meals(hass: HomeAssistant, scheduler: Any, now: Any, t
     return await hass.async_add_executor_job(work)
 
 
+def _simcha_clock(settings: Any) -> str | None:
+    """The schedule's simcha time as HH:MM, where it has one."""
+    night_time = (settings.get("simcha") or {}).get("night_time")
+    at = night_time.get("at") if isinstance(night_time, dict) else None
+    return at[:5] if isinstance(at, str) else None
+
+
 async def async_view_data(hass: HomeAssistant, days: int) -> dict[str, Any]:
     """Everything the client's view shows: the coming days, the rooms, the changes."""
     held = hass.data.get(DATA_VIEW) or {}
@@ -306,6 +313,15 @@ async def async_view_data(hass: HomeAssistant, days: int) -> dict[str, Any]:
         "room_night": dict(scheduler.room_night),
         "changes": [change for change in scheduler.changes if not _ended(change, now)],
         "has_simcha_time": bool((settings.get("simcha") or {}).get("night_time")),
+        # The time the schedule suggests for a simcha night, and the rooms
+        # simcha mode is for. No list: a schedule from before simcha rooms,
+        # where the whole house is late.
+        "simcha_time": _simcha_clock(settings),
+        "simcha_rooms": [
+            room for room in (settings.get("simcha") or {}).get("rooms") if isinstance(room, str)
+        ]
+        if isinstance((settings.get("simcha") or {}).get("rooms"), list)
+        else None,
         "rollover": settings.get("day_rollover", "04:00"),
         "automations_by_day": automations_by_day,
         "alongside": alongside,

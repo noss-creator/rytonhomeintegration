@@ -86,7 +86,7 @@ class RytonClientView extends HTMLElement {
     this._message = null
     this._busy = false
     this._form = this._emptyForm()
-    this._quick = { early: '', simchaFrom: '', simchaUntil: '' }
+    this._quick = { early: '', simchaFrom: '', simchaUntil: '', simchaAt: '' }
     this._until = {}
     this._away = { run: 'off', rooms: null, end: 'motzei', date: '' }
     this._at = { room: '', entity: '' } // where the Rooms tab is: the house, a room, or an entity
@@ -245,7 +245,7 @@ class RytonClientView extends HTMLElement {
     } else if (change.kind === 'shabbos') {
       what = change.week === 'late' ? 'Late Shabbos (at candle lighting)' : `Early Shabbos, starting at ${(change.start || {}).at || '?'}`
     } else if (change.kind === 'simcha') {
-      what = 'Simcha: a later Night'
+      what = change.at ? `Simcha: Night at ${change.at.slice(0, 5)} in the simcha rooms` : 'Simcha: a later Night'
     }
     const dates =
       change.from === change.until ? this._date(change.from) : `${this._date(change.from)} to ${this._date(change.until)}`
@@ -479,12 +479,14 @@ class RytonClientView extends HTMLElement {
       </section>
       <section class="card">
         <h2>Simcha</h2>
-        <p class="muted">Night runs later on the dates you choose.${this._data.has_simcha_time ? '' : ' This house has no simcha time set, so it cannot be used yet.'}</p>
+        ${this._simchaWords()}
         <div class="row">
           <label class="field">From<input type="date" data-quick="simchaFrom" min="${esc(this._data.today)}" value="${esc(q.simchaFrom)}"></label>
           <label class="field">Until<input type="date" data-quick="simchaUntil" min="${esc(q.simchaFrom || this._data.today)}" value="${esc(q.simchaUntil)}"></label>
-          <button class="btn" data-do="simcha" ${q.simchaFrom && this._data.has_simcha_time && !this._busy ? '' : 'disabled'}>Turn on</button>
+          <label class="field">Night at<input type="time" data-quick="simchaAt" value="${esc(this._simchaAt())}"></label>
+          <button class="btn" data-do="simcha" ${q.simchaFrom && this._simchaAt() && this._simchaCan() && !this._busy ? '' : 'disabled'}>Turn on</button>
         </div>
+        <p class="muted">The time has to be later than the house's Night and before the house's day starts over at ${esc(String(this._data.rollover || '04:00').slice(0, 5))}. On a night when it is not, Night runs as usual.</p>
       </section>`
   }
 
@@ -664,6 +666,27 @@ class RytonClientView extends HTMLElement {
         </section>`,
       )
       .join('')
+  }
+
+  /** The simcha time being entered: what the client typed, or the time the schedule suggests. */
+  _simchaAt() {
+    return this._quick.simchaAt || this._data.simcha_time || ''
+  }
+
+  /** Whether simcha mode would do anything: the house has simcha rooms, or is from before them. */
+  _simchaCan() {
+    const rooms = this._data.simcha_rooms
+    return !rooms || rooms.length > 0
+  }
+
+  _simchaWords() {
+    const rooms = this._data.simcha_rooms
+    if (!rooms) return '<p class="muted">Night runs later on the dates you choose, at the time you enter.</p>'
+    if (rooms.length === 0) {
+      return '<p class="muted">This house has no simcha rooms set, so it cannot be used yet.</p>'
+    }
+    const names = rooms.map((id) => esc(this._roomName(id))).join(', ')
+    return `<p class="muted">On the dates you choose, Night runs at the time you enter in the simcha rooms: <strong>${names}</strong>. The rest of the house has its Night as usual.</p>`
   }
 
   /** A room's own Night as it is being filled in, starting from what the house has. */
@@ -924,7 +947,7 @@ class RytonClientView extends HTMLElement {
       case 'simcha': {
         const from = this._quick.simchaFrom
         const until = this._quick.simchaUntil && this._quick.simchaUntil >= from ? this._quick.simchaUntil : from
-        return this._do(() => this._add({ kind: 'simcha' }, from, until), 'Simcha is on for those dates.')
+        return this._do(() => this._add({ kind: 'simcha', at: this._simchaAt() }, from, until), 'Simcha is on for those dates.')
       }
       case 'start-away': {
         const a = this._away

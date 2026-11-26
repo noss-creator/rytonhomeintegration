@@ -146,7 +146,17 @@ def check_change(change: Any) -> None:
             raise ChangeError("Away for a meal names a meal the house knows")
         if change["from"] != change["until"]:
             raise ChangeError("Away for a meal is for one date")
-    elif kind != SIMCHA:
+    elif kind == SIMCHA:
+        # The time the client entered. One with none uses the schedule's simcha time.
+        if "at" in change:
+            at = change["at"]
+            try:
+                if not isinstance(at, str) or len(at) not in (5, 8):
+                    raise ValueError(at)
+                datetime.strptime(at[:5], "%H:%M")
+            except ValueError:
+                raise ChangeError("The simcha time is not a clock time") from None
+    else:
         raise ChangeError(f"Unknown kind of temporary change: {kind!r}")
 
 

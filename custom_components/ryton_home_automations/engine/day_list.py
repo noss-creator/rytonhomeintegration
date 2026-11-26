@@ -535,6 +535,8 @@ def _base_list(
     night_usual: datetime | None = None
     room_times: Any = None
     night_rooms: dict[str, datetime] = {}
+    simcha_at: datetime | None = None
+    simcha_rooms: set[str] = set()
     seen: set[str] = set()
     day_allows = bool(entry.get("allow_past_rollover"))
 
@@ -555,23 +557,45 @@ def _base_list(
             night_usual = when
             room_times = automation.get("room_times")
         if automation_id == NIGHT and (simcha or simcha_changes):
-            night_time = (settings.get("simcha") or {}).get("night_time")
+            simcha_set = settings.get("simcha") or {}
+            night_time = simcha_set.get("night_time")
+            # The time the client entered when turning it on; the latest one made wins.
+            asked = next(
+                (c["at"] for c in reversed(simcha_changes) if isinstance(c.get("at"), str)), None
+            )
+
+            def simcha_when() -> datetime:
+                if asked is not None:
+                    late = _clock_on(day, asked, day_start, tz)
+                    check_rollover(late, day, tz, rollover, allow)
+                    return late
+                if night_time is None:
+                    raise ScheduleError("The schedule has no simcha time")
+                return fix(night_time, allow)
+
+            late: datetime | None = None
             if simcha:
                 if night_time is None:
                     raise ScheduleError("Simcha mode is on but the schedule has no simcha time")
-                # Simcha mode only ever makes Night later.
-                when = max(when, fix(night_time, allow))
+                late = fix(night_time, allow)
             else:
                 # Asked for by the client: where it cannot be done, Night
                 # keeps its time.
                 try:
-                    if night_time is None:
-                        raise ScheduleError("The schedule has no simcha time")
-                    when = max(when, fix(night_time, allow))
-                    used.update(change["id"] for change in simcha_changes)
+                    late = simcha_when()
                 except _CHANGE_FAILS as error:
                     skipped.extend((change["id"], str(error)) for change in simcha_changes)
-                    used.update(change["id"] for change in simcha_changes)
+                used.update(change["id"] for change in simcha_changes)
+            if late is not None:
+                if isinstance(simcha_set.get("rooms"), list):
+                    # The schedule names the simcha rooms: only they are late,
+                    # and the house's Night keeps its time.
+                    simcha_at = late
+                    simcha_rooms = {room for room in simcha_set["rooms"] if isinstance(room, str)}
+                else:
+                    # A schedule from before simcha rooms: the whole house is
+                    # late. Simcha mode only ever makes Night later.
+                    when = max(when, late)
 
         automations.append(
             ScheduledAutomation(
@@ -611,10 +635,20 @@ def _base_list(
         if change["id"] not in used:
             skipped.append((change["id"], "This day has no such automation"))
 
+    late_rooms: set[str] = set()
+    if simcha_at is not None:
+        automations, late_rooms = _with_simcha_rooms(automations, simcha_at, simcha_rooms)
     if night_usual is not None and (room_night or room_times):
+        # Simcha wins: a room that is late for the simcha has no other time that night.
         automations, night_rooms = _with_room_nights(
-            automations, room_night or {}, night_usual, day, day_start, tz,
-            room_times if isinstance(room_times, Mapping) else {},
+            automations,
+            {room: how for room, how in (room_night or {}).items() if room not in late_rooms},
+            night_usual, day, day_start, tz,
+            {
+                room: how
+                for room, how in (room_times if isinstance(room_times, Mapping) else {}).items()
+                if room not in late_rooms
+            },
         )
     automations.sort(key=lambda a: a.time)
     cycle_steps = [step for automation in automations for step in _cycle_steps(automation)]
@@ -629,6 +663,34 @@ def _base_list(
         night_usual=night_usual,
         night_rooms=night_rooms,
     )
+
+
+SIMCHA_NIGHT = "night#simcha"
+
+
+def _with_simcha_rooms(
+    automations: list[ScheduledAutomation], simcha_at: datetime, simcha_rooms: Collection[str]
+) -> tuple[list[ScheduledAutomation], set[str]]:
+    """Move the Night of the simcha rooms to the simcha time. Also the rooms it moved.
+
+    The house's Night keeps its time and leaves those rooms as they are.
+    What Night has for them runs at the simcha time. A simcha time that
+    is not later than Night changes nothing: simcha only makes Night later.
+    """
+    night = next((a for a in automations if a.id == NIGHT and not a.alongside), None)
+    if night is None or simcha_at <= night.time:
+        return automations, set()
+    late = {room: body for room, body in night.rooms.items() if room in simcha_rooms}
+    if not late:
+        return automations, set()
+    rest = {room: body for room, body in night.rooms.items() if room not in late}
+    automations = [replace(a, rooms=rest) if a is night else a for a in automations]
+    automations.append(
+        ScheduledAutomation(
+            SIMCHA_NIGHT, "Night, simcha rooms", simcha_at, night.fade_seconds, late, part_of=NIGHT,
+        )
+    )
+    return automations, set(late)
 
 
 ROOM_NIGHT = "night#own:"
